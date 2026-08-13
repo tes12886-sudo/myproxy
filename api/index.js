@@ -3,36 +3,21 @@ const axios = require('axios');
 
 const app = express();
 
-// ====================================================
-// MASUKKAN URL & TOKEN UPSTASH REDIS KAMU DI SINI
-// ====================================================
-const REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
-const REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
-
-// Helper Function Komunikasi ke Redis Real-Time
-async function getRulesFromRedis() {
-  try {
-    const res = await axios.get(`${REDIS_URL}/get/proxy_rules`, {
-      headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
-    });
-    if (res.data && res.data.result) {
-      return JSON.parse(res.data.result);
-    }
-  } catch (err) {
-    console.error('[REDIS READ ERROR]', err.message);
+// Database Rules di Memory
+let rules = [
+  {
+    id: 1,
+    path: '/PurchaseGacha',
+    type: 'hex',
+    payload: '0a0c080110cfdbcab003180138000a0c080110b2befcfd02180538000a0c080110b2befcfd02180138000a0c080110b2befcfd02180138000a0c080110b2befcfd0218023800620509050d0e0ab2010509050d0e0a'
+  },
+  {
+    id: 2,
+    path: '/Majorlogin',
+    type: 'hex',
+    payload: '08b6ddf9ad3f120249441a024944220253472a046c697665428b0665794a68624763694f694a49557a49314e694973496e4e3263694936496a45694c434a30655841694f694a4b5631516966512e65794a6859324e766457353058326c6b496a6f784e7a41774e7a63354f546b354d437769626d6c6a61323568625755694f694a6b6557786a555642315357396b6357647062324a754d306c684e47646e505430694c434a756233527058334a6c5a326c7662694936496b6c45496977696247396a613139795a576470623234694f694a4a52434973496d563464475679626d467358326c6b496a6f694f4451784d6a466a4d57526a5a474d794d6d497a4f474979596a517a4e446c6d4d445a6b4d545a694e7a67694c434a6c6548526c636d3568624639306558426c496a6f304c434a776247463058326c6b496a6f784c434a6a62476c6c626e5266646d567963326c7662694936496a45754d544d774c6a4977496977695a5731316247463062334a6663324e76636d55694f6a4173496d6c7a583256746457786864473979496a706d5957787a5a53776959323931626e52796556396a6232526c496a6f69553063694c434a6c6548526c636d356862463931615751694f6a59314d7a6b304d7a6b314f444573496e4a6c5a313968646d4630595849694f6a45774d6a41774d4441774e79776963323931636d4e6c496a6f774c434a7362324e7258334a6c5a326c76626c39306157316c496a6f784e7a67324e6a41304f5441784c434a6a62476c6c626e526664486c775a5349364d69776963326c6e626d463064584a6c5832316b4e534936496a63304d6a68694d6a557a5a47566d597a45324e4441784f474d324d4452684d575669596d5a6c596d526d4969776964584e70626d6466646d567963326c76626949364d537769636d56735a57467a5a56396a61474675626d5673496a6f695957356b636d39705a434973496e4a6c6247566863325666646d567963326c7662694936496b39434e5451694c434a6c654841694f6a45334f4459324e4459314e4456392e6a44754d596e575f565645776255675366764b4a576a367270536f684268594374332d31457341354b43554880e101522468747470733a2f2f6d7970726f78792d78692d77686561742e76657263656c2e6170702f7a02080182015d63736f7665727365612e7374726f6e67686f6c642e66726565666972656d6f62696c652e636f6d3b33342e3132362e37362e34353b33342e38372e3137372e31343b33342e38372e3137302e3233303b33352e3138352e3138332e35379a010953696e6761706f7265a80191bff6d306b2011c1c5c7866645c7862361e5c786363535c7865357f505000180a321011ba011c2d5c7863355c786335105c786663665c7866377b5010001004310010c2015d63736f7665727365612e7374726f6e67686f6c642e66726565666972656d6f62696c652e636f6d3b33342e3132362e37362e34353b33342e38372e3137372e31343b33342e38372e3137302e3233303b33352e3138352e3138332e3537ca0100'
   }
-  return [];
-}
-
-async function saveRulesToRedis(rules) {
-  try {
-    await axios.post(`${REDIS_URL}/set/proxy_rules`, JSON.stringify(rules), {
-      headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
-    });
-  } catch (err) {
-    console.error('[REDIS WRITE ERROR]', err.message);
-  }
-}
+];
 
 const DEFAULT_TARGET = 'https://clientbp.ggbluepanda.com';
 
@@ -40,48 +25,36 @@ app.use(express.json());
 app.use(express.raw({ type: '*/*', limit: '10mb' }));
 
 // API CRUD Routes
-app.get('/api/rules', async (req, res) => {
-  const rules = await getRulesFromRedis();
-  res.json(rules);
-});
+app.get('/api/rules', (req, res) => res.json(rules));
 
-app.post('/api/rules', async (req, res) => {
+app.post('/api/rules', (req, res) => {
   const { path, type, payload } = req.body || {};
   if (!path || !type || !payload) return res.status(400).json({ error: 'Semua field wajib diisi!' });
-
-  let rules = await getRulesFromRedis();
+  
   const newRule = { id: Date.now(), path, type, payload: payload.trim() };
   rules.unshift(newRule);
-
-  await saveRulesToRedis(rules);
   res.json({ success: true, rule: newRule });
 });
 
-app.put('/api/rules/:id', async (req, res) => {
+app.put('/api/rules/:id', (req, res) => {
   const id = parseInt(req.params.id);
   const { path, type, payload } = req.body || {};
-
-  let rules = await getRulesFromRedis();
+  
   const ruleIndex = rules.findIndex(r => r.id === id);
-
   if (ruleIndex !== -1) {
     rules[ruleIndex] = { id, path, type, payload: payload.trim() };
-    await saveRulesToRedis(rules);
     return res.json({ success: true });
   }
   res.status(404).json({ error: 'Rule tidak ditemukan' });
 });
 
-app.delete('/api/rules/:id', async (req, res) => {
+app.delete('/api/rules/:id', (req, res) => {
   const id = parseInt(req.params.id);
-  let rules = await getRulesFromRedis();
   rules = rules.filter(r => r.id !== id);
-
-  await saveRulesToRedis(rules);
   res.json({ success: true });
 });
 
-// DASHBOARD UI
+// DASHBOARD UI (HTML + JavaScript)
 app.get('/dashboard', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -89,14 +62,15 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Realtime Hex Proxy Dashboard</title>
+      <title>Hex Proxy Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-gray-900 text-white p-6 font-sans">
       <div class="max-w-4xl mx-auto">
-        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Realtime Hex Proxy Interceptor</h1>
-        <p class="text-gray-400 mb-6">Powered by Upstash Redis - Perubahan rule langsung aktif instan tanpa delay!</p>
+        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Raw Hex & Proxy Dashboard</h1>
+        <p class="text-gray-400 mb-6">Return Raw Hex Buffer (application/octet-stream) atau Forward URL.</p>
         
+        <!-- Form Add / Edit Rule -->
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-8">
           <h2 id="form-title" class="text-xl font-semibold mb-4 text-indigo-300">Tambah Rule Baru</h2>
           <input type="hidden" id="edit-id">
@@ -125,6 +99,7 @@ app.get('/dashboard', (req, res) => {
           </div>
         </div>
 
+        <!-- Rules Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
           <table class="w-full text-left text-sm">
             <thead class="bg-gray-700/50 text-gray-300 border-b border-gray-700">
@@ -252,23 +227,22 @@ app.get('/dashboard', (req, res) => {
   `);
 });
 
-// REALTIME INTERCEPTOR CORE
+// INTERCEPTOR CORE
 app.use(async (req, res) => {
   if (req.path.startsWith('/api/') || req.path === '/dashboard' || req.path === '/favicon.ico') return;
-
-  // FETCH RULES REALTIME DARI REDIS SETIAP REQUEST MASUK!
-  const rules = await getRulesFromRedis();
 
   const currentPath = req.path.toLowerCase();
   const matchedRule = rules.find(r => currentPath.includes(r.path.toLowerCase()));
 
   if (matchedRule) {
     if (matchedRule.type === 'hex') {
-      console.log(`[REALTIME HEX INTERCEPT] Path: ${req.path}`);
+      console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
       
+      // Bersihkan string hex
       const cleanHex = matchedRule.payload.replace(/[^0-9a-fA-F]/g, '');
       const hexBuffer = Buffer.from(cleanHex, 'hex');
 
+      // PAKSA Content-Type: application/octet-stream
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Length', hexBuffer.length);
       return res.status(200).send(hexBuffer);
