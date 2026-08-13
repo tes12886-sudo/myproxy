@@ -3,39 +3,43 @@ const axios = require('axios');
 
 const app = express();
 
-// Database Rules di Memory (Bisa disimpen sementara)
-// Format default bawaan kamu:
+// Database Rules di Memory (Default: /PurchaseGacha)
 let rules = [
   {
     id: 1,
     path: '/PurchaseGacha',
-    type: 'hex',
     payload: '0a0c080110cfdbcab003180138000a0c080110b2befcfd02180538000a0c080110b2befcfd02180138000a0c080110b2befcfd02180138000a0c080110b2befcfd0218023800620509050d0e0ab2010509050d0e0a'
-  },
-  {
-    id: 2,
-    path: '/Majorlogin',
-    type: 'proxy',
-    payload: 'https://loginbp.ggbluepanda.com'
   }
 ];
 
 const DEFAULT_TARGET = 'https://clientbp.ggbluepanda.com';
 
-// Parse Body JSON & Raw Buffer
+// Express Middleware
 app.use(express.json());
 app.use(express.raw({ type: '*/*' }));
 
-// API untuk Dashboard Management
+// API CRUD Routes
 app.get('/api/rules', (req, res) => res.json(rules));
 
 app.post('/api/rules', (req, res) => {
-  const { path, type, payload } = req.body;
-  if (!path || !type || !payload) return res.status(400).json({ error: 'Field kurang lengkap!' });
+  const { path, payload } = req.body;
+  if (!path || !payload) return res.status(400).json({ error: 'Path & Hex Payload wajib diisi!' });
   
-  const newRule = { id: Date.now(), path, type, payload };
+  const newRule = { id: Date.now(), path, payload: payload.trim() };
   rules.unshift(newRule);
   res.json({ success: true, rule: newRule });
+});
+
+app.put('/api/rules/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  const { path, payload } = req.body;
+  
+  const ruleIndex = rules.findIndex(r => r.id === id);
+  if (ruleIndex !== -1) {
+    rules[ruleIndex] = { id, path, payload: payload.trim() };
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: 'Rule tidak ditemukan' });
 });
 
 app.delete('/api/rules/:id', (req, res) => {
@@ -44,7 +48,7 @@ app.delete('/api/rules/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// DASHBOARD UI (HTML)
+// DASHBOARD UI (HTML + JavaScript)
 app.get('/dashboard', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -52,46 +56,43 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Proxy Rule Dashboard</title>
+      <title>Hex Proxy Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-gray-900 text-white p-6 font-sans">
       <div class="max-w-4xl mx-auto">
-        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Dynamic Proxy Dashboard</h1>
-        <p class="text-gray-400 mb-6">Atur interseptor path proxy tanpa perlu edit & redeploy kodingan!</p>
+        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Hex Response Interceptor</h1>
+        <p class="text-gray-400 mb-6">Kelola Response Hex khusus untuk path yang kamu tentukan.</p>
         
-        <!-- Form Add Rule -->
+        <!-- Form Add / Edit Rule -->
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-indigo-300">Tambah Rule Baru</h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <h2 id="form-title" class="text-xl font-semibold mb-4 text-indigo-300">Tambah Rule Hex Baru</h2>
+          <input type="hidden" id="edit-id">
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label class="block text-sm text-gray-400 mb-1">Path Target</label>
-              <input type="text" id="path" placeholder="/PurchaseGacha" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white">
+              <input type="text" id="path" placeholder="/PurchaseGacha" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-indigo-500">
             </div>
             <div>
-              <label class="block text-sm text-gray-400 mb-1">Tipe Response</label>
-              <select id="type" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white">
-                <option value="hex">Custom Hex Buffer</option>
-                <option value="json">Custom JSON</option>
-                <option value="proxy">Forward URL (Target Baru)</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-sm text-gray-400 mb-1">Payload / URL Target</label>
-              <input type="text" id="payload" placeholder="0a0c08... atau https://target.com" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white">
+              <label class="block text-sm text-gray-400 mb-1">Response Hex String</label>
+              <input type="text" id="payload" placeholder="0a0c080110..." class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-indigo-500">
             </div>
           </div>
-          <button onclick="addRule()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded font-medium text-sm transition">Simpan Rule</button>
+          
+          <div class="flex gap-2">
+            <button onclick="saveRule()" id="btn-save" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded font-medium text-sm transition">Simpan Rule</button>
+            <button onclick="resetForm()" id="btn-cancel" class="hidden bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded font-medium text-sm transition">Batal Edit</button>
+          </div>
         </div>
 
-        <!-- Rules List Table -->
+        <!-- Rules Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
           <table class="w-full text-left text-sm">
             <thead class="bg-gray-700/50 text-gray-300 border-b border-gray-700">
               <tr>
-                <th class="p-4">Path</th>
-                <th class="p-4">Tipe</th>
-                <th class="p-4">Payload / Target</th>
+                <th class="p-4">Path Target</th>
+                <th class="p-4">Payload Hex</th>
                 <th class="p-4 text-center">Aksi</th>
               </tr>
             </thead>
@@ -101,39 +102,84 @@ app.get('/dashboard', (req, res) => {
       </div>
 
       <script>
+        let allRules = [];
+
         async function fetchRules() {
           const res = await fetch('/api/rules');
-          const data = await res.json();
+          allRules = await res.json();
           const tbody = document.getElementById('rules-table');
-          tbody.innerHTML = data.map(r => \`
+          
+          if(allRules.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-gray-500">Belum ada rule Hex diset.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = allRules.map(r => \`
             <tr class="hover:bg-gray-750">
-              <td class="p-4 font-mono text-indigo-300">\${r.path}</td>
-              <td class="p-4"><span class="px-2 py-1 bg-gray-700 text-xs rounded uppercase font-semibold">\${r.type}</span></td>
-              <td class="p-4 font-mono text-xs text-gray-300 max-w-xs truncate">\${r.payload}</td>
+              <td class="p-4 font-mono text-indigo-300 font-semibold">\${r.path}</td>
+              <td class="p-4 font-mono text-xs text-gray-300 max-w-md break-all">\${r.payload}</td>
               <td class="p-4 text-center">
-                <button onclick="deleteRule(\${r.id})" class="text-red-400 hover:text-red-300 font-medium">Hapus</button>
+                <div class="flex justify-center gap-3">
+                  <button onclick="editRule(\${r.id})" class="text-indigo-400 hover:text-indigo-300 font-medium">Edit</button>
+                  <button onclick="deleteRule(\${r.id})" class="text-red-400 hover:text-red-300 font-medium">Hapus</button>
+                </div>
               </td>
             </tr>
           \`).join('');
         }
 
-        async function addRule() {
+        async function saveRule() {
+          const id = document.getElementById('edit-id').value;
           const path = document.getElementById('path').value;
-          const type = document.getElementById('type').value;
           const payload = document.getElementById('payload').value;
 
-          await fetch('/api/rules', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path, type, payload })
-          });
+          if(!path || !payload) return alert('Path dan Hex Wajib diisi!');
 
-          document.getElementById('path').value = '';
-          document.getElementById('payload').value = '';
+          if(id) {
+            // Update / Edit Mode
+            await fetch('/api/rules/' + id, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path, payload })
+            });
+          } else {
+            // Add Mode
+            await fetch('/api/rules', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path, payload })
+            });
+          }
+
+          resetForm();
           fetchRules();
         }
 
+        function editRule(id) {
+          const rule = allRules.find(r => r.id === id);
+          if(!rule) return;
+
+          document.getElementById('edit-id').value = rule.id;
+          document.getElementById('path').value = rule.path;
+          document.getElementById('payload').value = rule.payload;
+
+          document.getElementById('form-title').innerText = 'Edit Rule Hex';
+          document.getElementById('btn-save').innerText = 'Update Rule';
+          document.getElementById('btn-cancel').classList.remove('hidden');
+        }
+
+        function resetForm() {
+          document.getElementById('edit-id').value = '';
+          document.getElementById('path').value = '';
+          document.getElementById('payload').value = '';
+
+          document.getElementById('form-title').innerText = 'Tambah Rule Hex Baru';
+          document.getElementById('btn-save').innerText = 'Simpan Rule';
+          document.getElementById('btn-cancel').classList.add('hidden');
+        }
+
         async function deleteRule(id) {
+          if(!confirm('Yakin nak hapus rule ini bro?')) return;
           await fetch('/api/rules/' + id, { method: 'DELETE' });
           fetchRules();
         }
@@ -145,47 +191,22 @@ app.get('/dashboard', (req, res) => {
   `);
 });
 
-// Dynamic Proxy Interceptor Engine
+// PROXY ENGINE (INTERCEPTOR)
 app.use(async (req, res) => {
-  // Abaikan request dari UI Dashboard sendiri
   if (req.path.startsWith('/api/') || req.path === '/dashboard') return;
 
-  // Cari apakah ada path yang match dengan rules
+  // Cek apakah ada path yang cocok dengan rules Hex
   const matchedRule = rules.find(r => req.path.includes(r.path));
 
   if (matchedRule) {
-    console.log(`[MATCHED RULE] Path: ${req.path} -> Type: ${matchedRule.type}`);
-
-    // 1. Return Custom Hex
-    if (matchedRule.type === 'hex') {
-      res.setHeader('Content-Type', 'application/octet-stream');
-      return res.status(200).send(Buffer.from(matchedRule.payload, 'hex'));
-    }
-
-    // 2. Return Custom JSON
-    if (matchedRule.type === 'json') {
-      res.setHeader('Content-Type', 'application/json');
-      try {
-        return res.status(200).send(JSON.parse(matchedRule.payload));
-      } catch (e) {
-        return res.status(200).send(matchedRule.payload);
-      }
-    }
-
-    // 3. Custom Proxy Redirect
-    if (matchedRule.type === 'proxy') {
-      return forwardRequest(req, res, matchedRule.payload);
-    }
+    console.log(`[HEX INTERCEPTED] ${req.method} ${req.path}`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    return res.status(200).send(Buffer.from(matchedRule.payload, 'hex'));
   }
 
-  // Fallback ke Default Target (`clientbp.ggbluepanda.com`)
-  return forwardRequest(req, res, DEFAULT_TARGET);
-});
-
-async function forwardRequest(req, res, targetBase) {
-  const targetUrl = `${targetBase}${req.url}`;
-  const hostHeader = new URL(targetBase).host;
-
+  // Jika tidak match, forward request ke Default Host
+  const targetUrl = `${DEFAULT_TARGET}${req.url}`;
+  
   try {
     const headers = { ...req.headers };
     delete headers.host;
@@ -193,7 +214,7 @@ async function forwardRequest(req, res, targetBase) {
     const response = await axios({
       method: req.method,
       url: targetUrl,
-      headers: { ...headers, host: hostHeader },
+      headers: { ...headers, host: new URL(DEFAULT_TARGET).host },
       data: req.body,
       responseType: 'arraybuffer',
       validateStatus: () => true,
@@ -207,8 +228,8 @@ async function forwardRequest(req, res, targetBase) {
 
     return res.status(response.status).send(response.data);
   } catch (error) {
-    return res.status(502).send('Proxy Error');
+    return res.status(502).send('Proxy Error / Bad Gateway');
   }
-}
+});
 
 module.exports = app;
