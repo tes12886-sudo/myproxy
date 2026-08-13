@@ -3,21 +3,36 @@ const axios = require('axios');
 
 const app = express();
 
-// Database Rules di Memory
-let rules = [
-  {
-    id: 1,
-    path: '/PurchaseGacha',
-    type: 'hex',
-    payload: '0a0c080110cfdbcab003180138000a0c080110b2befcfd02180538000a0c080110b2befcfd02180138000a0c080110b2befcfd02180138000a0c080110b2befcfd0218023800620509050d0e0ab2010509050d0e0a'
-  },
-  {
-    id: 2,
-    path: '/Majorlogin',
-    type: 'url',
-    payload: 'https://loginbp.ggbluepanda.com'
+// ====================================================
+// MASUKKAN URL & TOKEN UPSTASH REDIS KAMU DI SINI
+// ====================================================
+const REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
+const REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
+
+// Helper Function Komunikasi ke Redis Real-Time
+async function getRulesFromRedis() {
+  try {
+    const res = await axios.get(`${REDIS_URL}/get/proxy_rules`, {
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
+    });
+    if (res.data && res.data.result) {
+      return JSON.parse(res.data.result);
+    }
+  } catch (err) {
+    console.error('[REDIS READ ERROR]', err.message);
   }
-];
+  return [];
+}
+
+async function saveRulesToRedis(rules) {
+  try {
+    await axios.post(`${REDIS_URL}/set/proxy_rules`, JSON.stringify(rules), {
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
+    });
+  } catch (err) {
+    console.error('[REDIS WRITE ERROR]', err.message);
+  }
+}
 
 const DEFAULT_TARGET = 'https://clientbp.ggbluepanda.com';
 
@@ -25,36 +40,48 @@ app.use(express.json());
 app.use(express.raw({ type: '*/*', limit: '10mb' }));
 
 // API CRUD Routes
-app.get('/api/rules', (req, res) => res.json(rules));
+app.get('/api/rules', async (req, res) => {
+  const rules = await getRulesFromRedis();
+  res.json(rules);
+});
 
-app.post('/api/rules', (req, res) => {
+app.post('/api/rules', async (req, res) => {
   const { path, type, payload } = req.body || {};
   if (!path || !type || !payload) return res.status(400).json({ error: 'Semua field wajib diisi!' });
-  
+
+  let rules = await getRulesFromRedis();
   const newRule = { id: Date.now(), path, type, payload: payload.trim() };
   rules.unshift(newRule);
+
+  await saveRulesToRedis(rules);
   res.json({ success: true, rule: newRule });
 });
 
-app.put('/api/rules/:id', (req, res) => {
+app.put('/api/rules/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   const { path, type, payload } = req.body || {};
-  
+
+  let rules = await getRulesFromRedis();
   const ruleIndex = rules.findIndex(r => r.id === id);
+
   if (ruleIndex !== -1) {
     rules[ruleIndex] = { id, path, type, payload: payload.trim() };
+    await saveRulesToRedis(rules);
     return res.json({ success: true });
   }
   res.status(404).json({ error: 'Rule tidak ditemukan' });
 });
 
-app.delete('/api/rules/:id', (req, res) => {
+app.delete('/api/rules/:id', async (req, res) => {
   const id = parseInt(req.params.id);
+  let rules = await getRulesFromRedis();
   rules = rules.filter(r => r.id !== id);
+
+  await saveRulesToRedis(rules);
   res.json({ success: true });
 });
 
-// DASHBOARD UI (HTML + JavaScript)
+// DASHBOARD UI
 app.get('/dashboard', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -62,15 +89,14 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Hex Proxy Dashboard</title>
+      <title>Realtime Hex Proxy Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-gray-900 text-white p-6 font-sans">
       <div class="max-w-4xl mx-auto">
-        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Raw Hex & Proxy Dashboard</h1>
-        <p class="text-gray-400 mb-6">Return Raw Hex Buffer (application/octet-stream) atau Forward URL.</p>
+        <h1 class="text-3xl font-bold mb-2 text-indigo-400">⚡ Realtime Hex Proxy Interceptor</h1>
+        <p class="text-gray-400 mb-6">Powered by Upstash Redis - Perubahan rule langsung aktif instan tanpa delay!</p>
         
-        <!-- Form Add / Edit Rule -->
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-8">
           <h2 id="form-title" class="text-xl font-semibold mb-4 text-indigo-300">Tambah Rule Baru</h2>
           <input type="hidden" id="edit-id">
@@ -99,7 +125,6 @@ app.get('/dashboard', (req, res) => {
           </div>
         </div>
 
-        <!-- Rules Table -->
         <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
           <table class="w-full text-left text-sm">
             <thead class="bg-gray-700/50 text-gray-300 border-b border-gray-700">
@@ -227,22 +252,23 @@ app.get('/dashboard', (req, res) => {
   `);
 });
 
-// INTERCEPTOR CORE
+// REALTIME INTERCEPTOR CORE
 app.use(async (req, res) => {
   if (req.path.startsWith('/api/') || req.path === '/dashboard' || req.path === '/favicon.ico') return;
+
+  // FETCH RULES REALTIME DARI REDIS SETIAP REQUEST MASUK!
+  const rules = await getRulesFromRedis();
 
   const currentPath = req.path.toLowerCase();
   const matchedRule = rules.find(r => currentPath.includes(r.path.toLowerCase()));
 
   if (matchedRule) {
     if (matchedRule.type === 'hex') {
-      console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
+      console.log(`[REALTIME HEX INTERCEPT] Path: ${req.path}`);
       
-      // Bersihkan string hex
       const cleanHex = matchedRule.payload.replace(/[^0-9a-fA-F]/g, '');
       const hexBuffer = Buffer.from(cleanHex, 'hex');
 
-      // PAKSA Content-Type: application/octet-stream
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Length', hexBuffer.length);
       return res.status(200).send(hexBuffer);
