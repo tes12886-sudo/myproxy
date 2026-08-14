@@ -4,7 +4,7 @@ const axios = require('axios');
 const app = express();
 
 // ====================================================
-// CONFIG UPSTASH REDIS
+// CONFIG UPSTASH REDIS (Ubah sesuai kredensialmu)
 // ====================================================
 const REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
 const REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
@@ -101,7 +101,7 @@ app.post('/api/rules', async (req, res) => {
 
   if (type === 'hex') {
     payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
-    if (!payload) payload = '0000'; // Default jika kosong
+    if (!payload) payload = '0000';
   }
 
   let rules = await getRulesFromRedis();
@@ -112,7 +112,6 @@ app.post('/api/rules', async (req, res) => {
   res.json({ success: true, rule: newRule });
 });
 
-// BULK ADD RULES (Dari Multiple Captured Logs)
 app.post('/api/rules/bulk-add', async (req, res) => {
   const { newRules } = req.body || {};
   if (!Array.isArray(newRules) || newRules.length === 0) {
@@ -170,7 +169,6 @@ app.delete('/api/rules/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// BULK DELETE RULES
 app.post('/api/rules/bulk-delete', async (req, res) => {
   const { ids } = req.body || {};
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -196,7 +194,6 @@ app.delete('/api/logs', async (req, res) => {
   res.json({ success: true });
 });
 
-// BULK DELETE LOGS
 app.post('/api/logs/bulk-delete', async (req, res) => {
   const { ids } = req.body || {};
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -221,7 +218,7 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>⚡ Hex Interceptor & Rule Manager</title>
+      <title>⚡ Hex Interceptor & Project Generator</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         .glass-card {
@@ -275,16 +272,20 @@ app.get('/dashboard', (req, res) => {
             <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
               ⚡ Realtime Hex Proxy Interceptor
             </h1>
-            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Rules • Bulk Add to Rule • Default Empty Hex 0000</p>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Download All Project Code • Auto Seed Active Hex • Multi-Select Rules</p>
           </div>
           
-          <div class="flex items-center gap-3 self-start md:self-auto">
+          <div class="flex flex-wrap items-center gap-3">
+            <button onclick="downloadFullProjectScript()" class="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white text-xs font-bold shadow-lg shadow-purple-950/50 transition duration-200 transform active:scale-95">
+              <span>📦</span>
+              <span>DOWNLOAD SCRIPT (FULL)</span>
+            </button>
             <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/60 border border-slate-700/50 text-xs text-slate-300">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               <span>Sync: <b id="timer-count" class="text-emerald-400 font-mono font-bold">10s</b></span>
             </div>
             <button onclick="manualRefresh()" class="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs transition duration-200">
-              🔄 Sync Now
+              🔄 Sync
             </button>
           </div>
         </div>
@@ -391,13 +392,12 @@ app.get('/dashboard', (req, res) => {
               <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
                 <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Centang 1 atau banyak response untuk langsung dijadikan Rule atau dihapus bersamaan.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Centang 1 atau banyak response untuk dijadikan Rule atau dihapus bersamaan.</p>
             </div>
             
             <div class="flex flex-wrap items-center gap-2">
               <input type="text" id="search-log" oninput="renderLogs()" placeholder="Cari Path..." class="glass-input px-3 py-1.5 rounded-xl text-xs text-white focus:outline-none transition">
               
-              <!-- Bulk Action Buttons for Logs -->
               <button id="btn-bulk-add-rules" onclick="addSelectedLogsToRules()" class="hidden bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
                 ⚡ Jadikan Rule (<span id="selected-logs-add-count">0</span>)
               </button>
@@ -461,6 +461,357 @@ app.get('/dashboard', (req, res) => {
             label.innerText = 'Target URL';
             input.placeholder = 'https://loginbp.ggbluepanda.com';
           }
+        }
+
+        // ====================================================
+        // DOWNLOAD FULL PROJECT SCRIPT (SIAP EDIT REDIS & RUN)
+        // ====================================================
+        function downloadFullProjectScript() {
+          const currentTarget = document.getElementById('default-target-input').value || 'https://clientbp.ggbluepanda.com';
+          
+          // Format rules aktif jadi JSON string rapi untuk dimasukkan sebagai initial data
+          const initialRulesJson = JSON.stringify(allRules, null, 2);
+
+          const scriptSource = \`// ====================================================
+// PROJECT: REALTIME HEX PROXY INTERCEPTOR & CAPTURER
+// ====================================================
+// CARA MENJALANKAN:
+// 1. npm install express axios
+// 2. Edit REDIS_URL dan REDIS_TOKEN di bawah ini
+// 3. Jalankan: node index.js
+// ====================================================
+
+const express = require('express');
+const axios = require('axios');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ====================================================
+// CONFIG UPSTASH REDIS (EDIT DI SINI)
+// ====================================================
+const REDIS_URL = 'YOUR_UPSTASH_REDIS_URL_HERE';
+const REDIS_TOKEN = 'YOUR_UPSTASH_REDIS_TOKEN_HERE';
+
+const FALLBACK_DEFAULT_TARGET = '\${currentTarget}';
+const MAX_LOGS_HISTORY = 100;
+
+// Pre-seeded Active Intercept Rules yang terbawa dari export
+const PRESEEDED_RULES = \${initialRulesJson};
+
+// ====================================================
+// REDIS HELPERS
+// ====================================================
+async function redisGet(key, fallback = null) {
+  try {
+    if (!REDIS_URL || REDIS_URL.includes('YOUR_UPSTASH')) return fallback;
+    const res = await axios.get(\\\`\\\${REDIS_URL}/get/\\\${key}\\\`, {
+      headers: { Authorization: \\\`Bearer \\\${REDIS_TOKEN}\\\` }
+    });
+    if (res.data && res.data.result) {
+      return JSON.parse(res.data.result);
+    }
+  } catch (err) {
+    console.error(\\\`[REDIS READ ERROR: \\\${key}]\\\`, err.message);
+  }
+  return fallback;
+}
+
+async function redisSet(key, value) {
+  try {
+    if (!REDIS_URL || REDIS_URL.includes('YOUR_UPSTASH')) return;
+    await axios.post(\\\`\\\${REDIS_URL}/set/\\\${key}\\\`, JSON.stringify(value), {
+      headers: { Authorization: \\\`Bearer \\\${REDIS_TOKEN}\\\` }
+    });
+  } catch (err) {
+    console.error(\\\`[REDIS WRITE ERROR: \\\${key}]\\\`, err.message);
+  }
+}
+
+async function getRulesFromRedis() {
+  const rules = await redisGet('proxy_rules', null);
+  if (rules === null) {
+    // Jika redis baru/kosong, pasang pre-seeded rules hasil download
+    if (PRESEEDED_RULES && PRESEEDED_RULES.length > 0) {
+      await saveRulesToRedis(PRESEEDED_RULES);
+      return PRESEEDED_RULES;
+    }
+    return [];
+  }
+  return rules;
+}
+
+async function saveRulesToRedis(rules) {
+  await redisSet('proxy_rules', rules);
+}
+
+async function getDefaultTarget() {
+  const target = await redisGet('proxy_default_target', null);
+  return target || FALLBACK_DEFAULT_TARGET;
+}
+
+async function saveDefaultTarget(target) {
+  await redisSet('proxy_default_target', target.trim());
+}
+
+async function pushCapturedLog(logItem) {
+  let logs = (await redisGet('proxy_captured_logs', [])) || [];
+  logs.unshift(logItem);
+  if (logs.length > MAX_LOGS_HISTORY) {
+    logs = logs.slice(0, MAX_LOGS_HISTORY);
+  }
+  await redisSet('proxy_captured_logs', logs);
+}
+
+async function getCapturedLogs() {
+  return (await redisGet('proxy_captured_logs', [])) || [];
+}
+
+// ====================================================
+// MIDDLEWARES
+// ====================================================
+app.use(express.json({ limit: '20mb' }));
+app.use(express.raw({ type: '*/*', limit: '20mb' }));
+
+// ====================================================
+// API ROUTES
+// ====================================================
+app.get('/api/target', async (req, res) => {
+  const target = await getDefaultTarget();
+  res.json({ target });
+});
+
+app.post('/api/target', async (req, res) => {
+  const { target } = req.body || {};
+  if (!target) return res.status(400).json({ error: 'Target URL tidak boleh kosong!' });
+  await saveDefaultTarget(target);
+  res.json({ success: true, target });
+});
+
+app.get('/api/rules', async (req, res) => {
+  const rules = await getRulesFromRedis();
+  res.json(rules);
+});
+
+app.post('/api/rules', async (req, res) => {
+  let { path, type, payload } = req.body || {};
+  if (!path || !type) return res.status(400).json({ error: 'Field path dan tipe wajib diisi!' });
+
+  if (type === 'hex') {
+    payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
+    if (!payload) payload = '0000';
+  }
+
+  let rules = await getRulesFromRedis();
+  const newRule = { id: Date.now(), path: path.trim(), type, payload: payload.trim() };
+  rules.unshift(newRule);
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true, rule: newRule });
+});
+
+app.post('/api/rules/bulk-add', async (req, res) => {
+  const { newRules } = req.body || {};
+  if (!Array.isArray(newRules) || newRules.length === 0) {
+    return res.status(400).json({ error: 'Data rule tidak valid!' });
+  }
+
+  let rules = await getRulesFromRedis();
+  let addedCount = 0;
+
+  for (const item of newRules) {
+    if (item.path) {
+      let cleanPayload = (item.payload || '').replace(/[^0-9a-fA-F]/g, '');
+      if (!cleanPayload) cleanPayload = '0000';
+
+      rules.unshift({
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        path: item.path.trim(),
+        type: 'hex',
+        payload: cleanPayload
+      });
+      addedCount++;
+    }
+  }
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true, count: addedCount });
+});
+
+app.put('/api/rules/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  let { path, type, payload } = req.body || {};
+
+  if (type === 'hex') {
+    payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
+    if (!payload) payload = '0000';
+  }
+
+  let rules = await getRulesFromRedis();
+  const ruleIndex = rules.findIndex(r => r.id === id);
+
+  if (ruleIndex !== -1) {
+    rules[ruleIndex] = { id, path: path.trim(), type, payload: payload.trim() };
+    await saveRulesToRedis(rules);
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: 'Rule tidak ditemukan' });
+});
+
+app.delete('/api/rules/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  let rules = await getRulesFromRedis();
+  rules = rules.filter(r => r.id !== id);
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true });
+});
+
+app.post('/api/rules/bulk-delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'Daftar ID tidak valid!' });
+  }
+
+  let rules = await getRulesFromRedis();
+  const idSet = new Set(ids.map(id => parseInt(id)));
+  rules = rules.filter(r => !idSet.has(r.id));
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true, count: ids.length });
+});
+
+app.get('/api/logs', async (req, res) => {
+  const logs = await getCapturedLogs();
+  res.json(logs);
+});
+
+app.delete('/api/logs', async (req, res) => {
+  await redisSet('proxy_captured_logs', []);
+  res.json({ success: true });
+});
+
+app.post('/api/logs/bulk-delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'Daftar ID tidak valid!' });
+  }
+
+  let logs = await getCapturedLogs();
+  const idSet = new Set(ids.map(String));
+  logs = logs.filter(l => !idSet.has(String(l.id)));
+
+  await redisSet('proxy_captured_logs', logs);
+  res.json({ success: true, count: ids.length });
+});
+
+// ====================================================
+// DASHBOARD UI (GLASSMORPHISM)
+// ====================================================
+app.get('/dashboard', (req, res) => {
+  res.send(\`\${document.documentElement.outerHTML}\`);
+});
+
+// ====================================================
+// INTERCEPTOR & PROXY CORE
+// ====================================================
+app.use(async (req, res) => {
+  if (req.path.startsWith('/api/') || req.path === '/dashboard' || req.path === '/favicon.ico') return;
+
+  const rules = await getRulesFromRedis();
+  const currentPath = req.path.toLowerCase();
+  const matchedRule = rules.find(r => currentPath.includes(r.path.toLowerCase()));
+
+  if (matchedRule) {
+    if (matchedRule.type === 'hex') {
+      console.log(\\\`[RAW HEX INTERCEPT] Path: \\\${req.path}\\\`);
+      
+      let cleanHex = (matchedRule.payload || '').replace(/[^0-9a-fA-F]/g, '');
+      if (!cleanHex) cleanHex = '0000';
+
+      const hexBuffer = Buffer.from(cleanHex, 'hex');
+
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', hexBuffer.length);
+      return res.status(200).send(hexBuffer);
+    }
+
+    if (matchedRule.type === 'url') {
+      console.log(\\\`[FORWARD MATCHED] Path: \\\${req.path} -> \\\${matchedRule.payload}\\\`);
+      return forwardRequest(req, res, matchedRule.payload);
+    }
+  }
+
+  const defaultTarget = await getDefaultTarget();
+  return forwardRequest(req, res, defaultTarget);
+});
+
+async function forwardRequest(req, res, targetBase) {
+  try {
+    const targetUrl = \\\`\\\${targetBase}\\\${req.url}\\\`;
+    const targetHost = new URL(targetBase).host;
+
+    const headers = { ...req.headers };
+    delete headers.host;
+    delete headers['x-forwarded-for'];
+    delete headers['x-real-ip'];
+
+    const response = await axios({
+      method: req.method,
+      url: targetUrl,
+      headers: { ...headers, host: targetHost },
+      data: req.body,
+      responseType: 'arraybuffer',
+      maxRedirects: 0,
+      validateStatus: () => true,
+    });
+
+    const responseBuffer = Buffer.from(response.data || []);
+    let hexString = responseBuffer.toString('hex');
+
+    if (!hexString || hexString.trim() === '') {
+      hexString = '0000';
+    }
+
+    pushCapturedLog({
+      id: Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+      time: new Date().toLocaleTimeString('id-ID'),
+      path: req.path,
+      status: response.status,
+      byteLength: responseBuffer.length > 0 ? responseBuffer.length : 2,
+      hex: hexString
+    }).catch(err => console.error('[LOG SAVE ERROR]', err.message));
+
+    Object.entries(response.headers).forEach(([key, value]) => {
+      if (!['transfer-encoding', 'content-encoding'].includes(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
+    });
+
+    return res.status(response.status).send(response.data);
+  } catch (error) {
+    console.error('[FORWARD FAIL]', error.message);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    return res.status(502).send(Buffer.from([]));
+  }
+}
+
+app.listen(PORT, () => {
+  console.log(\\\`⚡ Proxy & Dashboard running on port \\\${PORT}\\\`);
+  console.log(\\\`👉 Open Dashboard: http://localhost:\\\${PORT}/dashboard\\\`);
+});
+
+module.exports = app;
+\`;
+
+          const blob = new Blob([scriptSource], { type: 'text/javascript;charset=utf-8' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = 'index.js';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          alert('File project index.js berhasil didownload! Tinggal ganti kredensial Redis di baris atas lalu jalankan (node index.js).');
         }
 
         // ====================================================
@@ -956,7 +1307,7 @@ app.use(async (req, res) => {
       console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
       
       let cleanHex = (matchedRule.payload || '').replace(/[^0-9a-fA-F]/g, '');
-      if (!cleanHex) cleanHex = '0000'; // Default jika kosong
+      if (!cleanHex) cleanHex = '0000';
 
       const hexBuffer = Buffer.from(cleanHex, 'hex');
 
@@ -998,7 +1349,6 @@ async function forwardRequest(req, res, targetBase) {
     const responseBuffer = Buffer.from(response.data || []);
     let hexString = responseBuffer.toString('hex');
 
-    // Jika response kosong / 0 byte, fallback ke '0000'
     if (!hexString || hexString.trim() === '') {
       hexString = '0000';
     }
