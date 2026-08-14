@@ -139,6 +139,22 @@ app.delete('/api/rules/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// BULK DELETE RULES
+app.post('/api/rules/bulk-delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'Daftar ID tidak valid!' });
+  }
+
+  let rules = await getRulesFromRedis();
+  const idSet = new Set(ids.map(id => parseInt(id)));
+  rules = rules.filter(r => !idSet.has(r.id));
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true, count: ids.length });
+});
+
+// LOGS API
 app.get('/api/logs', async (req, res) => {
   const logs = await getCapturedLogs();
   res.json(logs);
@@ -149,8 +165,23 @@ app.delete('/api/logs', async (req, res) => {
   res.json({ success: true });
 });
 
+// BULK DELETE LOGS
+app.post('/api/logs/bulk-delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'Daftar ID tidak valid!' });
+  }
+
+  let logs = await getCapturedLogs();
+  const idSet = new Set(ids.map(String));
+  logs = logs.filter(l => !idSet.has(String(l.id)));
+
+  await redisSet('proxy_captured_logs', logs);
+  res.json({ success: true, count: ids.length });
+});
+
 // ====================================================
-// DASHBOARD UI (GLASSMORPHISM + FILE IMPORT + QUICK CONVERT)
+// DASHBOARD UI (GLASSMORPHISM + MULTI-SELECT DELETE)
 // ====================================================
 app.get('/dashboard', (req, res) => {
   res.send(`
@@ -178,6 +209,12 @@ app.get('/dashboard', (req, res) => {
           border-color: rgba(129, 140, 248, 0.6);
           box-shadow: 0 0 15px rgba(99, 102, 241, 0.25);
         }
+        .custom-checkbox {
+          accent-color: #6366f1;
+          width: 1rem;
+          height: 1rem;
+          cursor: pointer;
+        }
         ::-webkit-scrollbar {
           width: 6px;
           height: 6px;
@@ -196,7 +233,7 @@ app.get('/dashboard', (req, res) => {
     </head>
     <body class="bg-gradient-to-br from-slate-950 via-[#0a0f1d] to-[#120e2e] text-slate-100 min-h-screen p-4 md:p-8 font-sans antialiased relative selection:bg-indigo-500 selection:text-white">
       
-      <!-- Background Ambient Glows -->
+      <!-- Ambient Glows -->
       <div class="fixed top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[130px] pointer-events-none -z-10"></div>
       <div class="fixed bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-emerald-600/10 rounded-full blur-[140px] pointer-events-none -z-10"></div>
 
@@ -208,7 +245,7 @@ app.get('/dashboard', (req, res) => {
             <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
               ⚡ Realtime Hex Proxy Interceptor
             </h1>
-            <p class="text-slate-400 text-xs md:text-sm mt-1">Import File Rules • 1-Click Convert Intercept • Auto Clean Hex</p>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Delete • Import Rules • 1-Click Convert</p>
           </div>
           
           <div class="flex items-center gap-3 self-start md:self-auto">
@@ -244,7 +281,6 @@ app.get('/dashboard', (req, res) => {
               <h2 id="form-title" class="text-sm font-semibold tracking-wide uppercase text-indigo-300">Tambah Rule Baru</h2>
             </div>
             
-            <!-- File Import Button -->
             <div class="flex items-center gap-2">
               <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs font-medium transition">
                 <span>📁</span>
@@ -286,16 +322,27 @@ app.get('/dashboard', (req, res) => {
 
         <!-- TABLE INTERCEPT RULES -->
         <div class="glass-card rounded-2xl overflow-hidden">
-          <div class="p-4 md:px-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-            <h3 class="font-semibold text-sm tracking-wide text-slate-200 flex items-center gap-2">
-              <span>📋</span> Active Intercept Rules
-            </h3>
-            <button onclick="fetchRules()" class="text-xs text-indigo-400 hover:text-indigo-300 transition">Reload Rules</button>
+          <div class="p-4 md:px-6 border-b border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/[0.02]">
+            <div class="flex items-center gap-3">
+              <h3 class="font-semibold text-sm tracking-wide text-slate-200 flex items-center gap-2">
+                <span>📋</span> Active Intercept Rules (<span id="rule-count">0</span>)
+              </h3>
+            </div>
+            
+            <div class="flex items-center gap-2">
+              <button id="btn-bulk-delete-rules" onclick="deleteSelectedRules()" class="hidden bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
+                🗑️ Hapus (<span id="selected-rules-count">0</span>) Terpilih
+              </button>
+              <button onclick="fetchRules()" class="text-xs text-indigo-400 hover:text-indigo-300 transition">Reload Rules</button>
+            </div>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left text-sm">
               <thead class="bg-slate-900/40 text-slate-400 text-xs uppercase font-medium border-b border-white/5">
                 <tr>
+                  <th class="p-4 w-10 text-center">
+                    <input type="checkbox" id="select-all-rules" onchange="toggleSelectAllRules(this)" class="custom-checkbox rounded">
+                  </th>
                   <th class="p-4">Path Target</th>
                   <th class="p-4">Tipe</th>
                   <th class="p-4">Hex / Forward Payload</th>
@@ -314,13 +361,18 @@ app.get('/dashboard', (req, res) => {
               <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
                 <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Klik "⚡ Jadi Rule" untuk langsung jadikan response sebagai Rule Intercept.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Pilih satu atau banyak response untuk dihapus bersamaan.</p>
             </div>
             
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <input type="text" id="search-log" oninput="renderLogs()" placeholder="Cari Path..." class="glass-input px-3 py-1.5 rounded-xl text-xs text-white focus:outline-none transition">
+              
+              <button id="btn-bulk-delete-logs" onclick="deleteSelectedLogs()" class="hidden bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
+                🗑️ Hapus (<span id="selected-logs-count">0</span>) Terpilih
+              </button>
+
               <button onclick="clearLogs()" class="bg-red-500/10 hover:bg-red-500/25 border border-red-500/30 text-red-300 text-xs px-3 py-1.5 rounded-xl transition">
-                Clear Logs
+                Hapus Semua
               </button>
             </div>
           </div>
@@ -329,6 +381,9 @@ app.get('/dashboard', (req, res) => {
             <table class="w-full text-left text-sm">
               <thead class="bg-slate-900/80 backdrop-blur text-slate-400 text-xs uppercase font-medium border-b border-white/5 sticky top-0 z-10">
                 <tr>
+                  <th class="p-4 w-10 text-center">
+                    <input type="checkbox" id="select-all-logs" onchange="toggleSelectAllLogs(this)" class="custom-checkbox rounded">
+                  </th>
                   <th class="p-4">Waktu</th>
                   <th class="p-4">Path Target</th>
                   <th class="p-4">Status</th>
@@ -346,6 +401,8 @@ app.get('/dashboard', (req, res) => {
       <script>
         let allRules = [];
         let allLogs = [];
+        let selectedRuleIds = new Set();
+        let selectedLogIds = new Set();
         let refreshSeconds = 10;
         let countdownTimer = null;
 
@@ -372,14 +429,13 @@ app.get('/dashboard', (req, res) => {
         }
 
         // ====================================================
-        // FILE IMPORTER (.HEX / .TXT)
+        // FILE IMPORTER
         // ====================================================
         function handleFileImport(event) {
           const file = event.target.files[0];
           if (!file) return;
 
           const fileName = file.name;
-          // Ekstrak nama path dari nama file (misal: "PurchaseGacha_response.hex" -> "/PurchaseGacha")
           let guessedPath = fileName.replace(/_response\.(hex|txt)$/i, '').replace(/\.(hex|txt)$/i, '');
           if (guessedPath && !guessedPath.startsWith('/')) {
             guessedPath = '/' + guessedPath;
@@ -388,7 +444,6 @@ app.get('/dashboard', (req, res) => {
           const reader = new FileReader();
 
           if (fileName.endsWith('.hex')) {
-            // Baca binary lalu konversi ke hex string
             reader.onload = function(e) {
               const buffer = new Uint8Array(e.target.result);
               let hexString = '';
@@ -399,7 +454,6 @@ app.get('/dashboard', (req, res) => {
             };
             reader.readAsArrayBuffer(file);
           } else {
-            // Baca file teks plain
             reader.onload = function(e) {
               const textContent = e.target.result;
               const cleanHex = textContent.replace(/[^0-9a-fA-F]/g, '');
@@ -408,7 +462,6 @@ app.get('/dashboard', (req, res) => {
             reader.readAsText(file);
           }
 
-          // Reset input file agar bisa import file yang sama lagi jika perlu
           event.target.value = '';
         }
 
@@ -421,7 +474,6 @@ app.get('/dashboard', (req, res) => {
           }
           document.getElementById('payload').value = hexData;
 
-          // Scroll ke form
           document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
           alert('Berhasil mengimpor data payload! Silakan periksa path lalu klik "Simpan Rule".');
         }
@@ -447,7 +499,7 @@ app.get('/dashboard', (req, res) => {
         }
 
         // ====================================================
-        // TARGET & RULES LOGIC
+        // TARGET LOGIC
         // ====================================================
         async function fetchTarget() {
           try {
@@ -468,19 +520,35 @@ app.get('/dashboard', (req, res) => {
           alert('Default target berhasil diupdate!');
         }
 
+        // ====================================================
+        // RULES LOGIC & MULTI-SELECT
+        // ====================================================
         async function fetchRules() {
           try {
             const res = await fetch('/api/rules');
             allRules = await res.json();
-            const tbody = document.getElementById('rules-table');
-            
-            if(!allRules || allRules.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="4" class="p-6 text-center text-slate-500 text-xs">Belum ada rule intercept aktif.</td></tr>';
-              return;
-            }
+            renderRules();
+          } catch(e) {}
+        }
 
-            tbody.innerHTML = allRules.map(r => \`
-              <tr class="hover:bg-white/[0.02] transition">
+        function renderRules() {
+          const tbody = document.getElementById('rules-table');
+          const countEl = document.getElementById('rule-count');
+          countEl.innerText = allRules.length;
+
+          if(!allRules || allRules.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-slate-500 text-xs">Belum ada rule intercept aktif.</td></tr>';
+            updateRulesSelectionUI();
+            return;
+          }
+
+          tbody.innerHTML = allRules.map(r => {
+            const isChecked = selectedRuleIds.has(r.id);
+            return \`
+              <tr class="hover:bg-white/[0.02] transition \${isChecked ? 'bg-indigo-500/10' : ''}">
+                <td class="p-4 text-center">
+                  <input type="checkbox" class="custom-checkbox rule-cb" value="\${r.id}" \${isChecked ? 'checked' : ''} onchange="toggleSelectRule(\${r.id}, this.checked)">
+                </td>
                 <td class="p-4 font-mono text-indigo-300 font-medium text-xs">\${r.path}</td>
                 <td class="p-4">
                   <span class="px-2.5 py-1 \${r.type === 'hex' ? 'bg-amber-400/10 text-amber-300 border border-amber-400/20' : 'bg-blue-400/10 text-blue-300 border border-blue-400/20'} text-[10px] rounded-lg uppercase tracking-wider font-semibold">
@@ -495,8 +563,58 @@ app.get('/dashboard', (req, res) => {
                   </div>
                 </td>
               </tr>
-            \`).join('');
-          } catch(e) {}
+            \`;
+          }).join('');
+
+          updateRulesSelectionUI();
+        }
+
+        function toggleSelectRule(id, isChecked) {
+          if (isChecked) {
+            selectedRuleIds.add(id);
+          } else {
+            selectedRuleIds.delete(id);
+          }
+          updateRulesSelectionUI();
+        }
+
+        function toggleSelectAllRules(masterEl) {
+          if (masterEl.checked) {
+            allRules.forEach(r => selectedRuleIds.add(r.id));
+          } else {
+            selectedRuleIds.clear();
+          }
+          renderRules();
+        }
+
+        function updateRulesSelectionUI() {
+          const bulkBtn = document.getElementById('btn-bulk-delete-rules');
+          const countSpan = document.getElementById('selected-rules-count');
+          const selectAllEl = document.getElementById('select-all-rules');
+
+          countSpan.innerText = selectedRuleIds.size;
+          if (selectedRuleIds.size > 0) {
+            bulkBtn.classList.remove('hidden');
+          } else {
+            bulkBtn.classList.add('hidden');
+          }
+
+          selectAllEl.checked = allRules.length > 0 && selectedRuleIds.size === allRules.length;
+        }
+
+        async function deleteSelectedRules() {
+          const ids = Array.from(selectedRuleIds);
+          if (ids.length === 0) return;
+          if (!confirm(\`Yakin ingin menghapus \${ids.length} rule terpilih?\`)) return;
+
+          await fetch('/api/rules/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+          });
+
+          selectedRuleIds.clear();
+          fetchRules();
         }
 
         async function saveRule() {
@@ -558,11 +676,12 @@ app.get('/dashboard', (req, res) => {
         async function deleteRule(id) {
           if(!confirm('Hapus rule ini?')) return;
           await fetch('/api/rules/' + id, { method: 'DELETE' });
+          selectedRuleIds.delete(id);
           fetchRules();
         }
 
         // ====================================================
-        // CAPTURED LOGS LOGIC
+        // CAPTURED LOGS & MULTI-SELECT
         // ====================================================
         async function fetchLogs() {
           try {
@@ -580,47 +699,115 @@ app.get('/dashboard', (req, res) => {
           countEl.innerText = allLogs ? allLogs.length : 0;
 
           if(!allLogs || allLogs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-slate-500 text-xs">Belum ada response yang ter-capture.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="p-6 text-center text-slate-500 text-xs">Belum ada response yang ter-capture.</td></tr>';
+            updateLogsSelectionUI([]);
             return;
           }
 
           const filtered = allLogs.filter(log => log.path.toLowerCase().includes(searchKeyword));
 
           if (filtered.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-slate-500 text-xs">Tidak ada hasil cocok.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="p-6 text-center text-slate-500 text-xs">Tidak ada hasil cocok.</td></tr>';
+            updateLogsSelectionUI([]);
             return;
           }
 
-          tbody.innerHTML = filtered.map(log => \`
-            <tr class="hover:bg-white/[0.02] transition">
-              <td class="p-4 text-xs text-slate-400 whitespace-nowrap">\${log.time}</td>
-              <td class="p-4 font-mono text-xs text-emerald-300 font-semibold">\${log.path}</td>
-              <td class="p-4 text-xs">
-                <span class="px-2 py-0.5 rounded-md \${log.status >= 200 && log.status < 300 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300'} font-mono text-[11px] font-bold">
-                  \${log.status}
-                </span>
-              </td>
-              <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 24)}... (\${log.byteLength} B)</td>
-              <td class="p-4 text-center whitespace-nowrap">
-                <div class="flex items-center justify-center gap-1.5">
-                  <button onclick="makeRuleFromLog('\${log.id}')" title="Gunakan sebagai Rule Intercept" class="bg-emerald-600/30 hover:bg-emerald-600 border border-emerald-500/40 text-emerald-200 text-xs px-2 py-1 rounded-lg transition font-medium">
-                    ⚡ Jadi Rule
-                  </button>
-                  <button onclick="downloadLogById('\${log.id}', 'hex')" class="bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 text-xs px-2 py-1 rounded-lg transition">
-                    .hex
-                  </button>
-                  <button onclick="downloadLogById('\${log.id}', 'txt')" class="bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 text-slate-200 text-xs px-2 py-1 rounded-lg transition">
-                    .txt
-                  </button>
-                </div>
-              </td>
-            </tr>
-          \`).join('');
+          tbody.innerHTML = filtered.map(log => {
+            const isChecked = selectedLogIds.has(String(log.id));
+            return \`
+              <tr class="hover:bg-white/[0.02] transition \${isChecked ? 'bg-indigo-500/10' : ''}">
+                <td class="p-4 text-center">
+                  <input type="checkbox" class="custom-checkbox log-cb" value="\${log.id}" \${isChecked ? 'checked' : ''} onchange="toggleSelectLog('\${log.id}', this.checked)">
+                </td>
+                <td class="p-4 text-xs text-slate-400 whitespace-nowrap">\${log.time}</td>
+                <td class="p-4 font-mono text-xs text-emerald-300 font-semibold">\${log.path}</td>
+                <td class="p-4 text-xs">
+                  <span class="px-2 py-0.5 rounded-md \${log.status >= 200 && log.status < 300 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300'} font-mono text-[11px] font-bold">
+                    \${log.status}
+                  </span>
+                </td>
+                <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 24)}... (\${log.byteLength} B)</td>
+                <td class="p-4 text-center whitespace-nowrap">
+                  <div class="flex items-center justify-center gap-1.5">
+                    <button onclick="makeRuleFromLog('\${log.id}')" title="Gunakan sebagai Rule Intercept" class="bg-emerald-600/30 hover:bg-emerald-600 border border-emerald-500/40 text-emerald-200 text-xs px-2 py-1 rounded-lg transition font-medium">
+                      ⚡ Jadi Rule
+                    </button>
+                    <button onclick="downloadLogById('\${log.id}', 'hex')" class="bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 text-xs px-2 py-1 rounded-lg transition">
+                      .hex
+                    </button>
+                    <button onclick="downloadLogById('\${log.id}', 'txt')" class="bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 text-slate-200 text-xs px-2 py-1 rounded-lg transition">
+                      .txt
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            \`;
+          }).join('');
+
+          updateLogsSelectionUI(filtered);
+        }
+
+        function toggleSelectLog(id, isChecked) {
+          if (isChecked) {
+            selectedLogIds.add(String(id));
+          } else {
+            selectedLogIds.delete(String(id));
+          }
+          const searchKeyword = (document.getElementById('search-log').value || '').toLowerCase().trim();
+          const filtered = allLogs.filter(log => log.path.toLowerCase().includes(searchKeyword));
+          updateLogsSelectionUI(filtered);
+        }
+
+        function toggleSelectAllLogs(masterEl) {
+          const searchKeyword = (document.getElementById('search-log').value || '').toLowerCase().trim();
+          const filtered = allLogs.filter(log => log.path.toLowerCase().includes(searchKeyword));
+
+          if (masterEl.checked) {
+            filtered.forEach(l => selectedLogIds.add(String(l.id)));
+          } else {
+            filtered.forEach(l => selectedLogIds.delete(String(l.id)));
+          }
+          renderLogs();
+        }
+
+        function updateLogsSelectionUI(filteredList = []) {
+          const bulkBtn = document.getElementById('btn-bulk-delete-logs');
+          const countSpan = document.getElementById('selected-logs-count');
+          const selectAllEl = document.getElementById('select-all-logs');
+
+          countSpan.innerText = selectedLogIds.size;
+          if (selectedLogIds.size > 0) {
+            bulkBtn.classList.remove('hidden');
+          } else {
+            bulkBtn.classList.add('hidden');
+          }
+
+          if (filteredList.length > 0) {
+            selectAllEl.checked = filteredList.every(l => selectedLogIds.has(String(l.id)));
+          } else {
+            selectAllEl.checked = false;
+          }
+        }
+
+        async function deleteSelectedLogs() {
+          const ids = Array.from(selectedLogIds);
+          if (ids.length === 0) return;
+          if (!confirm(\`Yakin ingin menghapus \${ids.length} response terpilih?\`)) return;
+
+          await fetch('/api/logs/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+          });
+
+          selectedLogIds.clear();
+          fetchLogs();
         }
 
         async function clearLogs() {
           if(!confirm('Hapus seluruh riwayat capture?')) return;
           await fetch('/api/logs', { method: 'DELETE' });
+          selectedLogIds.clear();
           fetchLogs();
         }
 
