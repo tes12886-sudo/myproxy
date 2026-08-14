@@ -150,7 +150,7 @@ app.delete('/api/logs', async (req, res) => {
 });
 
 // ====================================================
-// DASHBOARD UI (GLASSMORPHISM + 10s AUTO-REFRESH)
+// DASHBOARD UI (GLASSMORPHISM + FILE IMPORT + QUICK CONVERT)
 // ====================================================
 app.get('/dashboard', (req, res) => {
   res.send(`
@@ -159,7 +159,7 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>⚡ Hex Interceptor Glass Dashboard</title>
+      <title>⚡ Hex Interceptor & Rule Manager</title>
       <script src="https://cdn.tailwindcss.com"></script>
       <style>
         .glass-card {
@@ -206,15 +206,15 @@ app.get('/dashboard', (req, res) => {
         <div class="glass-card rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
-              ⚡ Realtime Hex Proxy & Interceptor
+              ⚡ Realtime Hex Proxy Interceptor
             </h1>
-            <p class="text-slate-400 text-xs md:text-sm mt-1">Upstash Redis Powered • Real-time Response Capturer • Custom Hex Injector</p>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Import File Rules • 1-Click Convert Intercept • Auto Clean Hex</p>
           </div>
           
           <div class="flex items-center gap-3 self-start md:self-auto">
             <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/60 border border-slate-700/50 text-xs text-slate-300">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>Syncing: <b id="timer-count" class="text-emerald-400 font-mono font-bold">10s</b></span>
+              <span>Sync: <b id="timer-count" class="text-emerald-400 font-mono font-bold">10s</b></span>
             </div>
             <button onclick="manualRefresh()" class="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs transition duration-200">
               🔄 Sync Now
@@ -236,12 +236,24 @@ app.get('/dashboard', (req, res) => {
           </div>
         </div>
 
-        <!-- FORM INTERCEPT RULES -->
-        <div class="glass-card p-5 md:p-6 rounded-2xl">
-          <div class="flex items-center gap-2 mb-4">
-            <span class="text-indigo-400 text-base">🛠️</span>
-            <h2 id="form-title" class="text-sm font-semibold tracking-wide uppercase text-indigo-300">Tambah Rule Baru</h2>
+        <!-- FORM INTERCEPT RULES & FILE IMPORTER -->
+        <div class="glass-card p-5 md:p-6 rounded-2xl" id="rule-form-section">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div class="flex items-center gap-2">
+              <span class="text-indigo-400 text-base">🛠️</span>
+              <h2 id="form-title" class="text-sm font-semibold tracking-wide uppercase text-indigo-300">Tambah Rule Baru</h2>
+            </div>
+            
+            <!-- File Import Button -->
+            <div class="flex items-center gap-2">
+              <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs font-medium transition">
+                <span>📁</span>
+                <span>Import dari File (.hex / .txt)</span>
+                <input type="file" id="file-import" accept=".hex,.txt" class="hidden" onchange="handleFileImport(event)">
+              </label>
+            </div>
           </div>
+
           <input type="hidden" id="edit-id">
           
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -302,7 +314,7 @@ app.get('/dashboard', (req, res) => {
               <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
                 <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Response asli dari server target otomatis dikonversi ke format HEX.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Klik "⚡ Jadi Rule" untuk langsung jadikan response sebagai Rule Intercept.</p>
             </div>
             
             <div class="flex items-center gap-2">
@@ -321,7 +333,7 @@ app.get('/dashboard', (req, res) => {
                   <th class="p-4">Path Target</th>
                   <th class="p-4">Status</th>
                   <th class="p-4">Hex Preview (Size)</th>
-                  <th class="p-4 text-center">Download</th>
+                  <th class="p-4 text-center">Aksi Cepat</th>
                 </tr>
               </thead>
               <tbody id="logs-table" class="divide-y divide-white/5 font-normal"></tbody>
@@ -359,6 +371,84 @@ app.get('/dashboard', (req, res) => {
           }
         }
 
+        // ====================================================
+        // FILE IMPORTER (.HEX / .TXT)
+        // ====================================================
+        function handleFileImport(event) {
+          const file = event.target.files[0];
+          if (!file) return;
+
+          const fileName = file.name;
+          // Ekstrak nama path dari nama file (misal: "PurchaseGacha_response.hex" -> "/PurchaseGacha")
+          let guessedPath = fileName.replace(/_response\.(hex|txt)$/i, '').replace(/\.(hex|txt)$/i, '');
+          if (guessedPath && !guessedPath.startsWith('/')) {
+            guessedPath = '/' + guessedPath;
+          }
+
+          const reader = new FileReader();
+
+          if (fileName.endsWith('.hex')) {
+            // Baca binary lalu konversi ke hex string
+            reader.onload = function(e) {
+              const buffer = new Uint8Array(e.target.result);
+              let hexString = '';
+              for (let i = 0; i < buffer.length; i++) {
+                hexString += buffer[i].toString(16).padStart(2, '0');
+              }
+              applyImportedData(guessedPath, hexString);
+            };
+            reader.readAsArrayBuffer(file);
+          } else {
+            // Baca file teks plain
+            reader.onload = function(e) {
+              const textContent = e.target.result;
+              const cleanHex = textContent.replace(/[^0-9a-fA-F]/g, '');
+              applyImportedData(guessedPath, cleanHex);
+            };
+            reader.readAsText(file);
+          }
+
+          // Reset input file agar bisa import file yang sama lagi jika perlu
+          event.target.value = '';
+        }
+
+        function applyImportedData(guessedPath, hexData) {
+          document.getElementById('type').value = 'hex';
+          updatePlaceholder();
+
+          if (guessedPath && guessedPath !== '/root') {
+            document.getElementById('path').value = guessedPath;
+          }
+          document.getElementById('payload').value = hexData;
+
+          // Scroll ke form
+          document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
+          alert('Berhasil mengimpor data payload! Silakan periksa path lalu klik "Simpan Rule".');
+        }
+
+        // ====================================================
+        // QUICK CONVERT INTERCEPT LOG TO RULE
+        // ====================================================
+        function makeRuleFromLog(id) {
+          const item = allLogs.find(l => l.id == id);
+          if (!item) return;
+
+          document.getElementById('edit-id').value = '';
+          document.getElementById('path').value = item.path;
+          document.getElementById('type').value = 'hex';
+          updatePlaceholder();
+          document.getElementById('payload').value = item.hex;
+
+          document.getElementById('form-title').innerText = 'Jadikan Response Sebagai Rule Intercept';
+          document.getElementById('btn-save').innerText = 'Simpan Intercept Rule Ini';
+          document.getElementById('btn-cancel').classList.remove('hidden');
+
+          document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // ====================================================
+        // TARGET & RULES LOGIC
+        // ====================================================
         async function fetchTarget() {
           try {
             const res = await fetch('/api/target');
@@ -449,6 +539,8 @@ app.get('/dashboard', (req, res) => {
           document.getElementById('form-title').innerText = 'Edit Rule';
           document.getElementById('btn-save').innerText = 'Update Rule';
           document.getElementById('btn-cancel').classList.remove('hidden');
+
+          document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
         }
 
         function resetForm() {
@@ -469,6 +561,9 @@ app.get('/dashboard', (req, res) => {
           fetchRules();
         }
 
+        // ====================================================
+        // CAPTURED LOGS LOGIC
+        // ====================================================
         async function fetchLogs() {
           try {
             const res = await fetch('/api/logs');
@@ -505,10 +600,19 @@ app.get('/dashboard', (req, res) => {
                   \${log.status}
                 </span>
               </td>
-              <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 30)}... (\${log.byteLength} B)</td>
+              <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 24)}... (\${log.byteLength} B)</td>
               <td class="p-4 text-center whitespace-nowrap">
-                <button onclick="downloadLogById('\${log.id}', 'hex')" class="bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 text-xs px-2.5 py-1 rounded-lg transition mr-1">.hex</button>
-                <button onclick="downloadLogById('\${log.id}', 'txt')" class="bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 text-slate-200 text-xs px-2.5 py-1 rounded-lg transition">.txt</button>
+                <div class="flex items-center justify-center gap-1.5">
+                  <button onclick="makeRuleFromLog('\${log.id}')" title="Gunakan sebagai Rule Intercept" class="bg-emerald-600/30 hover:bg-emerald-600 border border-emerald-500/40 text-emerald-200 text-xs px-2 py-1 rounded-lg transition font-medium">
+                    ⚡ Jadi Rule
+                  </button>
+                  <button onclick="downloadLogById('\${log.id}', 'hex')" class="bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 text-xs px-2 py-1 rounded-lg transition">
+                    .hex
+                  </button>
+                  <button onclick="downloadLogById('\${log.id}', 'txt')" class="bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 text-slate-200 text-xs px-2 py-1 rounded-lg transition">
+                    .txt
+                  </button>
+                </div>
               </td>
             </tr>
           \`).join('');
@@ -545,7 +649,7 @@ app.get('/dashboard', (req, res) => {
         }
 
         // ====================================================
-        // 10 SECONDS REFRESH & COUNTDOWN LOGIC
+        // 10s AUTO-SYNC
         // ====================================================
         function syncAll() {
           fetchLogs();
