@@ -10,6 +10,7 @@ const REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
 const REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
 
 const FALLBACK_DEFAULT_TARGET = 'https://clientbp.ggbluepanda.com';
+const MAX_LOGS_HISTORY = 100;
 
 // ====================================================
 // REDIS HELPERS
@@ -58,7 +59,9 @@ async function saveDefaultTarget(target) {
 async function pushCapturedLog(logItem) {
   let logs = (await redisGet('proxy_captured_logs', [])) || [];
   logs.unshift(logItem);
-  if (logs.length > 15) logs = logs.slice(0, 15); // Simpan 15 data respon terakhir
+  if (logs.length > MAX_LOGS_HISTORY) {
+    logs = logs.slice(0, MAX_LOGS_HISTORY);
+  }
   await redisSet('proxy_captured_logs', logs);
 }
 
@@ -69,14 +72,12 @@ async function getCapturedLogs() {
 // ====================================================
 // MIDDLEWARES
 // ====================================================
-app.use(express.json({ limit: '10mb' }));
-app.use(express.raw({ type: '*/*', limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.raw({ type: '*/*', limit: '20mb' }));
 
 // ====================================================
 // API ROUTES
 // ====================================================
-
-// Default Target API
 app.get('/api/target', async (req, res) => {
   const target = await getDefaultTarget();
   res.json({ target });
@@ -89,7 +90,6 @@ app.post('/api/target', async (req, res) => {
   res.json({ success: true, target });
 });
 
-// Rules API
 app.get('/api/rules', async (req, res) => {
   const rules = await getRulesFromRedis();
   res.json(rules);
@@ -99,7 +99,6 @@ app.post('/api/rules', async (req, res) => {
   let { path, type, payload } = req.body || {};
   if (!path || !type || !payload) return res.status(400).json({ error: 'Semua field wajib diisi!' });
 
-  // Auto clean spasi/whitespace jika tipe hex
   if (type === 'hex') {
     payload = payload.replace(/[^0-9a-fA-F]/g, '');
   }
@@ -140,7 +139,6 @@ app.delete('/api/rules/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// Logs API
 app.get('/api/logs', async (req, res) => {
   const logs = await getCapturedLogs();
   res.json(logs);
@@ -152,7 +150,7 @@ app.delete('/api/logs', async (req, res) => {
 });
 
 // ====================================================
-// DASHBOARD UI
+// DASHBOARD UI (GLASSMORPHISM + 10s AUTO-REFRESH)
 // ====================================================
 app.get('/dashboard', (req, res) => {
   res.send(`
@@ -161,98 +159,172 @@ app.get('/dashboard', (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Realtime Hex Proxy & Capturer</title>
+      <title>⚡ Hex Interceptor Glass Dashboard</title>
       <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        .glass-card {
+          background: rgba(255, 255, 255, 0.04);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .glass-input {
+          background: rgba(15, 23, 42, 0.5);
+          backdrop-filter: blur(8px);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .glass-input:focus {
+          border-color: rgba(129, 140, 248, 0.6);
+          box-shadow: 0 0 15px rgba(99, 102, 241, 0.25);
+        }
+        ::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+          background: rgba(15, 23, 42, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.15);
+          border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+      </style>
     </head>
-    <body class="bg-gray-900 text-white p-6 font-sans">
-      <div class="max-w-5xl mx-auto space-y-6">
-        
-        <div>
-          <h1 class="text-3xl font-bold text-indigo-400">⚡ Realtime Hex Proxy & Interceptor</h1>
-          <p class="text-gray-400 text-sm mt-1">Simpan/Edit Rules, Real-Time Target Switcher, & Auto-Hex Response Capture.</p>
-        </div>
+    <body class="bg-gradient-to-br from-slate-950 via-[#0a0f1d] to-[#120e2e] text-slate-100 min-h-screen p-4 md:p-8 font-sans antialiased relative selection:bg-indigo-500 selection:text-white">
+      
+      <!-- Background Ambient Glows -->
+      <div class="fixed top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[130px] pointer-events-none -z-10"></div>
+      <div class="fixed bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-emerald-600/10 rounded-full blur-[140px] pointer-events-none -z-10"></div>
 
-        <!-- CONFIG TARGET DEFAULT -->
-        <div class="bg-gray-800 p-5 rounded-xl border border-gray-700">
-          <h2 class="text-lg font-semibold mb-3 text-emerald-400">🎯 Default Forward Target URL</h2>
-          <div class="flex flex-col sm:flex-row gap-3">
-            <input type="text" id="default-target-input" placeholder="https://clientbp.ggbluepanda.com" class="flex-1 bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-emerald-500">
-            <button onclick="saveTarget()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded font-medium text-sm transition whitespace-nowrap">Simpan Target</button>
+      <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- HEADER -->
+        <div class="glass-card rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
+              ⚡ Realtime Hex Proxy & Interceptor
+            </h1>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Upstash Redis Powered • Real-time Response Capturer • Custom Hex Injector</p>
+          </div>
+          
+          <div class="flex items-center gap-3 self-start md:self-auto">
+            <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/60 border border-slate-700/50 text-xs text-slate-300">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>Syncing: <b id="timer-count" class="text-emerald-400 font-mono font-bold">10s</b></span>
+            </div>
+            <button onclick="manualRefresh()" class="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs transition duration-200">
+              🔄 Sync Now
+            </button>
           </div>
         </div>
 
-        <!-- FORM TAMBAH / EDIT RULE -->
-        <div class="bg-gray-800 p-5 rounded-xl border border-gray-700">
-          <h2 id="form-title" class="text-lg font-semibold mb-4 text-indigo-300">Tambah Rule Baru</h2>
+        <!-- TARGET DEFAULT URL -->
+        <div class="glass-card p-5 md:p-6 rounded-2xl">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-emerald-400 text-base">🎯</span>
+            <h2 class="text-sm font-semibold tracking-wide uppercase text-emerald-400">Default Target URL Forwarder</h2>
+          </div>
+          <div class="flex flex-col sm:flex-row gap-3">
+            <input type="text" id="default-target-input" placeholder="https://clientbp.ggbluepanda.com" class="glass-input flex-1 p-3 rounded-xl text-sm text-white focus:outline-none transition">
+            <button onclick="saveTarget()" class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium px-6 py-3 rounded-xl text-sm transition shadow-lg shadow-emerald-950/40">
+              Simpan Target
+            </button>
+          </div>
+        </div>
+
+        <!-- FORM INTERCEPT RULES -->
+        <div class="glass-card p-5 md:p-6 rounded-2xl">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-indigo-400 text-base">🛠️</span>
+            <h2 id="form-title" class="text-sm font-semibold tracking-wide uppercase text-indigo-300">Tambah Rule Baru</h2>
+          </div>
           <input type="hidden" id="edit-id">
           
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">Path Target</label>
-              <input type="text" id="path" placeholder="/PurchaseGacha" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-indigo-500">
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Path Endpoint</label>
+              <input type="text" id="path" placeholder="/PurchaseGacha" class="glass-input w-full p-2.5 rounded-xl text-sm text-white focus:outline-none transition">
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">Tipe Response</label>
-              <select id="type" onchange="updatePlaceholder()" class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-indigo-500">
-                <option value="hex">Custom Hex Buffer</option>
-                <option value="url">Forward Target URL</option>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Tipe Response</label>
+              <select id="type" onchange="updatePlaceholder()" class="glass-input w-full p-2.5 rounded-xl text-sm text-white focus:outline-none transition">
+                <option value="hex" class="bg-slate-900 text-white">Custom Hex Buffer</option>
+                <option value="url" class="bg-slate-900 text-white">Forward Target URL</option>
               </select>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1" id="payload-label">Hex String (Auto Remove Spaces)</label>
-              <input type="text" id="payload" oninput="cleanHexInput(this)" placeholder="0a 0c 08 01 10..." class="w-full bg-gray-900 border border-gray-700 p-2.5 rounded text-sm text-white focus:outline-none focus:border-indigo-500">
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" id="payload-label">Hex String (Auto Clean Spasi)</label>
+              <input type="text" id="payload" oninput="cleanHexInput(this)" placeholder="0a0c080110..." class="glass-input w-full p-2.5 rounded-xl text-sm text-white font-mono focus:outline-none transition">
             </div>
           </div>
           
           <div class="flex gap-2">
-            <button onclick="saveRule()" id="btn-save" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded font-medium text-sm transition">Simpan Rule</button>
-            <button onclick="resetForm()" id="btn-cancel" class="hidden bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded font-medium text-sm transition">Batal Edit</button>
+            <button onclick="saveRule()" id="btn-save" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition shadow-lg shadow-indigo-950/40">
+              Simpan Rule
+            </button>
+            <button onclick="resetForm()" id="btn-cancel" class="hidden glass-card hover:bg-white/10 text-slate-300 px-5 py-2.5 rounded-xl font-medium text-sm transition">
+              Batal Edit
+            </button>
           </div>
         </div>
 
-        <!-- TABLE RULES -->
-        <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-          <div class="p-4 border-b border-gray-700 flex justify-between items-center">
-            <h3 class="font-semibold text-gray-200">Daftar Intercept Rules</h3>
-            <button onclick="fetchRules()" class="text-xs text-indigo-400 hover:underline">Refresh</button>
-          </div>
-          <table class="w-full text-left text-sm">
-            <thead class="bg-gray-750 text-gray-400 border-b border-gray-700">
-              <tr>
-                <th class="p-3">Path</th>
-                <th class="p-3">Tipe</th>
-                <th class="p-3">Payload (Hex / URL)</th>
-                <th class="p-3 text-center">Aksi</th>
-              </tr>
-            </thead>
-            <tbody id="rules-table" class="divide-y divide-gray-700"></tbody>
-          </table>
-        </div>
-
-        <!-- CAPTURED DEFAULT TARGET RESPONSES -->
-        <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-          <div class="p-4 border-b border-gray-700 flex justify-between items-center">
-            <div>
-              <h3 class="font-semibold text-emerald-400">Captured Responses (Converted to Hex)</h3>
-              <p class="text-xs text-gray-400">Response asli dari target server otomatis di-capture ke bentuk HEX.</p>
-            </div>
-            <div class="flex gap-2">
-              <button onclick="fetchLogs()" class="text-xs text-indigo-400 hover:underline">Refresh</button>
-              <button onclick="clearLogs()" class="text-xs text-red-400 hover:underline">Clear</button>
-            </div>
+        <!-- TABLE INTERCEPT RULES -->
+        <div class="glass-card rounded-2xl overflow-hidden">
+          <div class="p-4 md:px-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+            <h3 class="font-semibold text-sm tracking-wide text-slate-200 flex items-center gap-2">
+              <span>📋</span> Active Intercept Rules
+            </h3>
+            <button onclick="fetchRules()" class="text-xs text-indigo-400 hover:text-indigo-300 transition">Reload Rules</button>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left text-sm">
-              <thead class="bg-gray-750 text-gray-400 border-b border-gray-700">
+              <thead class="bg-slate-900/40 text-slate-400 text-xs uppercase font-medium border-b border-white/5">
                 <tr>
-                  <th class="p-3">Waktu</th>
-                  <th class="p-3">Path</th>
-                  <th class="p-3">Status</th>
-                  <th class="p-3">Hex Preview (Size)</th>
-                  <th class="p-3 text-center">Download</th>
+                  <th class="p-4">Path Target</th>
+                  <th class="p-4">Tipe</th>
+                  <th class="p-4">Hex / Forward Payload</th>
+                  <th class="p-4 text-center">Aksi</th>
                 </tr>
               </thead>
-              <tbody id="logs-table" class="divide-y divide-gray-700"></tbody>
+              <tbody id="rules-table" class="divide-y divide-white/5 font-normal"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- CAPTURED RESPONSES -->
+        <div class="glass-card rounded-2xl overflow-hidden">
+          <div class="p-4 md:p-6 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/[0.02]">
+            <div>
+              <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
+                <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">Response asli dari server target otomatis dikonversi ke format HEX.</p>
+            </div>
+            
+            <div class="flex items-center gap-2">
+              <input type="text" id="search-log" oninput="renderLogs()" placeholder="Cari Path..." class="glass-input px-3 py-1.5 rounded-xl text-xs text-white focus:outline-none transition">
+              <button onclick="clearLogs()" class="bg-red-500/10 hover:bg-red-500/25 border border-red-500/30 text-red-300 text-xs px-3 py-1.5 rounded-xl transition">
+                Clear Logs
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto max-h-[480px] overflow-y-auto">
+            <table class="w-full text-left text-sm">
+              <thead class="bg-slate-900/80 backdrop-blur text-slate-400 text-xs uppercase font-medium border-b border-white/5 sticky top-0 z-10">
+                <tr>
+                  <th class="p-4">Waktu</th>
+                  <th class="p-4">Path Target</th>
+                  <th class="p-4">Status</th>
+                  <th class="p-4">Hex Preview (Size)</th>
+                  <th class="p-4 text-center">Download</th>
+                </tr>
+              </thead>
+              <tbody id="logs-table" class="divide-y divide-white/5 font-normal"></tbody>
             </table>
           </div>
         </div>
@@ -262,6 +334,8 @@ app.get('/dashboard', (req, res) => {
       <script>
         let allRules = [];
         let allLogs = [];
+        let refreshSeconds = 10;
+        let countdownTimer = null;
 
         function cleanHexInput(el) {
           const type = document.getElementById('type').value;
@@ -276,7 +350,7 @@ app.get('/dashboard', (req, res) => {
           const input = document.getElementById('payload');
           
           if(type === 'hex') {
-            label.innerText = 'Hex String (Auto Remove Spaces)';
+            label.innerText = 'Hex String (Auto Clean Spasi)';
             input.placeholder = '0a0c080110...';
             input.value = input.value.replace(/[^0-9a-fA-F]/g, '');
           } else {
@@ -286,9 +360,11 @@ app.get('/dashboard', (req, res) => {
         }
 
         async function fetchTarget() {
-          const res = await fetch('/api/target');
-          const data = await res.json();
-          document.getElementById('default-target-input').value = data.target || '';
+          try {
+            const res = await fetch('/api/target');
+            const data = await res.json();
+            document.getElementById('default-target-input').value = data.target || '';
+          } catch(e) {}
         }
 
         async function saveTarget() {
@@ -303,32 +379,34 @@ app.get('/dashboard', (req, res) => {
         }
 
         async function fetchRules() {
-          const res = await fetch('/api/rules');
-          allRules = await res.json();
-          const tbody = document.getElementById('rules-table');
-          
-          if(!allRules || allRules.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-gray-500">Belum ada rule intercept.</td></tr>';
-            return;
-          }
+          try {
+            const res = await fetch('/api/rules');
+            allRules = await res.json();
+            const tbody = document.getElementById('rules-table');
+            
+            if(!allRules || allRules.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="4" class="p-6 text-center text-slate-500 text-xs">Belum ada rule intercept aktif.</td></tr>';
+              return;
+            }
 
-          tbody.innerHTML = allRules.map(r => \`
-            <tr class="hover:bg-gray-750">
-              <td class="p-3 font-mono text-indigo-300 font-semibold">\${r.path}</td>
-              <td class="p-3">
-                <span class="px-2 py-0.5 \${r.type === 'hex' ? 'bg-amber-500/20 text-amber-300' : 'bg-blue-500/20 text-blue-300'} text-xs rounded uppercase font-semibold">
-                  \${r.type === 'hex' ? 'RAW HEX' : 'FORWARD'}
-                </span>
-              </td>
-              <td class="p-3 font-mono text-xs text-gray-300 max-w-xs truncate">\${r.payload}</td>
-              <td class="p-3 text-center">
-                <div class="flex justify-center gap-3">
-                  <button onclick="editRule(\${r.id})" class="text-indigo-400 hover:text-indigo-300 text-xs font-medium">Edit</button>
-                  <button onclick="deleteRule(\${r.id})" class="text-red-400 hover:text-red-300 text-xs font-medium">Hapus</button>
-                </div>
-              </td>
-            </tr>
-          \`).join('');
+            tbody.innerHTML = allRules.map(r => \`
+              <tr class="hover:bg-white/[0.02] transition">
+                <td class="p-4 font-mono text-indigo-300 font-medium text-xs">\${r.path}</td>
+                <td class="p-4">
+                  <span class="px-2.5 py-1 \${r.type === 'hex' ? 'bg-amber-400/10 text-amber-300 border border-amber-400/20' : 'bg-blue-400/10 text-blue-300 border border-blue-400/20'} text-[10px] rounded-lg uppercase tracking-wider font-semibold">
+                    \${r.type === 'hex' ? 'RAW HEX' : 'FORWARD'}
+                  </span>
+                </td>
+                <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${r.payload}</td>
+                <td class="p-4 text-center">
+                  <div class="flex justify-center gap-2">
+                    <button onclick="editRule(\${r.id})" class="px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs transition">Edit</button>
+                    <button onclick="deleteRule(\${r.id})" class="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs transition">Hapus</button>
+                  </div>
+                </td>
+              </tr>
+            \`).join('');
+          } catch(e) {}
         }
 
         async function saveRule() {
@@ -392,50 +470,69 @@ app.get('/dashboard', (req, res) => {
         }
 
         async function fetchLogs() {
-          const res = await fetch('/api/logs');
-          allLogs = await res.json();
+          try {
+            const res = await fetch('/api/logs');
+            allLogs = await res.json();
+            renderLogs();
+          } catch(e) {}
+        }
+
+        function renderLogs() {
           const tbody = document.getElementById('logs-table');
+          const countEl = document.getElementById('log-count');
+          const searchKeyword = (document.getElementById('search-log').value || '').toLowerCase().trim();
+
+          countEl.innerText = allLogs ? allLogs.length : 0;
 
           if(!allLogs || allLogs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-500">Belum ada response yang ter-capture.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-slate-500 text-xs">Belum ada response yang ter-capture.</td></tr>';
             return;
           }
 
-          tbody.innerHTML = allLogs.map((log, idx) => \`
-            <tr class="hover:bg-gray-750">
-              <td class="p-3 text-xs text-gray-400 whitespace-nowrap">\${log.time}</td>
-              <td class="p-3 font-mono text-xs text-emerald-300 font-semibold">\${log.path}</td>
-              <td class="p-3 text-xs"><span class="px-2 py-0.5 rounded bg-gray-700 text-white">\${log.status}</span></td>
-              <td class="p-3 font-mono text-xs text-gray-300 max-w-xs truncate">\${log.hex.substring(0, 30)}... (\${log.byteLength} B)</td>
-              <td class="p-3 text-center whitespace-nowrap">
-                <button onclick="downloadLog(\${idx}, 'hex')" class="bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs px-2.5 py-1 rounded mr-1">.hex</button>
-                <button onclick="downloadLog(\${idx}, 'txt')" class="bg-gray-700 hover:bg-gray-600 text-white text-xs px-2.5 py-1 rounded">.txt</button>
+          const filtered = allLogs.filter(log => log.path.toLowerCase().includes(searchKeyword));
+
+          if (filtered.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-slate-500 text-xs">Tidak ada hasil cocok.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = filtered.map(log => \`
+            <tr class="hover:bg-white/[0.02] transition">
+              <td class="p-4 text-xs text-slate-400 whitespace-nowrap">\${log.time}</td>
+              <td class="p-4 font-mono text-xs text-emerald-300 font-semibold">\${log.path}</td>
+              <td class="p-4 text-xs">
+                <span class="px-2 py-0.5 rounded-md \${log.status >= 200 && log.status < 300 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300'} font-mono text-[11px] font-bold">
+                  \${log.status}
+                </span>
+              </td>
+              <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 30)}... (\${log.byteLength} B)</td>
+              <td class="p-4 text-center whitespace-nowrap">
+                <button onclick="downloadLogById('\${log.id}', 'hex')" class="bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 text-xs px-2.5 py-1 rounded-lg transition mr-1">.hex</button>
+                <button onclick="downloadLogById('\${log.id}', 'txt')" class="bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 text-slate-200 text-xs px-2.5 py-1 rounded-lg transition">.txt</button>
               </td>
             </tr>
           \`).join('');
         }
 
         async function clearLogs() {
+          if(!confirm('Hapus seluruh riwayat capture?')) return;
           await fetch('/api/logs', { method: 'DELETE' });
           fetchLogs();
         }
 
-        function downloadLog(index, ext) {
-          const item = allLogs[index];
+        function downloadLogById(id, ext) {
+          const item = allLogs.find(l => l.id == id);
           if(!item) return;
 
-          // Format nama file: {namepath}_response.hex / .txt
           const cleanNamePath = item.path.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^_+|_+$/g, '') || 'root';
           const filename = \`\${cleanNamePath}_response.\${ext}\`;
 
           let blob;
           if (ext === 'hex') {
-            // Download sebagai raw binary buffer
             const cleanHex = item.hex.replace(/[^0-9a-fA-F]/g, '');
             const bytes = new Uint8Array(cleanHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []);
             blob = new Blob([bytes], { type: 'application/octet-stream' });
           } else {
-            // Download sebagai teks plain Hex String
             blob = new Blob([item.hex], { type: 'text/plain;charset=utf-8' });
           }
 
@@ -447,11 +544,34 @@ app.get('/dashboard', (req, res) => {
           document.body.removeChild(link);
         }
 
-        // Init Data & Polling
-        fetchTarget();
-        fetchRules();
-        fetchLogs();
-        setInterval(fetchLogs, 5000); // Polling log respon setiap 5 detik
+        // ====================================================
+        // 10 SECONDS REFRESH & COUNTDOWN LOGIC
+        // ====================================================
+        function syncAll() {
+          fetchLogs();
+          fetchRules();
+          fetchTarget();
+        }
+
+        function manualRefresh() {
+          syncAll();
+          refreshSeconds = 10;
+          document.getElementById('timer-count').innerText = refreshSeconds + 's';
+        }
+
+        function startAutoSync() {
+          syncAll();
+          countdownTimer = setInterval(() => {
+            refreshSeconds--;
+            if (refreshSeconds <= 0) {
+              syncAll();
+              refreshSeconds = 10;
+            }
+            document.getElementById('timer-count').innerText = refreshSeconds + 's';
+          }, 1000);
+        }
+
+        startAutoSync();
       </script>
     </body>
     </html>
@@ -469,7 +589,6 @@ app.use(async (req, res) => {
   const matchedRule = rules.find(r => currentPath.includes(r.path.toLowerCase()));
 
   if (matchedRule) {
-    // 1. Tipe Response HEX
     if (matchedRule.type === 'hex') {
       console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
       
@@ -481,14 +600,12 @@ app.use(async (req, res) => {
       return res.status(200).send(hexBuffer);
     }
 
-    // 2. Tipe Response FORWARD CUSTOM URL
     if (matchedRule.type === 'url') {
       console.log(`[FORWARD MATCHED] Path: ${req.path} -> ${matchedRule.payload}`);
       return forwardRequest(req, res, matchedRule.payload);
     }
   }
 
-  // Fallback ke Default Target (Real-time dari Redis)
   const defaultTarget = await getDefaultTarget();
   return forwardRequest(req, res, defaultTarget);
 });
@@ -516,8 +633,8 @@ async function forwardRequest(req, res, targetBase) {
     const responseBuffer = Buffer.from(response.data);
     const hexString = responseBuffer.toString('hex');
 
-    // Simpan history captured response ke Redis secara asynchronous
     pushCapturedLog({
+      id: Date.now() + '-' + Math.random().toString(36).substring(2, 7),
       time: new Date().toLocaleTimeString('id-ID'),
       path: req.path,
       status: response.status,
@@ -525,7 +642,6 @@ async function forwardRequest(req, res, targetBase) {
       hex: hexString
     }).catch(err => console.error('[LOG SAVE ERROR]', err.message));
 
-    // Teruskan header response ke client
     Object.entries(response.headers).forEach(([key, value]) => {
       if (!['transfer-encoding', 'content-encoding'].includes(key.toLowerCase())) {
         res.setHeader(key, value);
