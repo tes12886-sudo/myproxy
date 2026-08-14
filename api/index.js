@@ -4,10 +4,10 @@ const axios = require('axios');
 const app = express();
 
 // ====================================================
-// CONFIG UPSTASH REDIS
+// CONFIG UPSTASH REDIS (Dapat diubah via Dashboard/API)
 // ====================================================
-const REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
-const REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
+let REDIS_URL = 'https://primary-sheepdog-180502.upstash.io';
+let REDIS_TOKEN = 'gQAAAAAAAsEWAAIgcDI0ZmNjOGYxMDE1ZjI0YTU2ODJmM2EwNDBhMThiYmQ5YQ';
 
 const FALLBACK_DEFAULT_TARGET = 'https://clientbp.ggbluepanda.com';
 const MAX_LOGS_HISTORY = 100;
@@ -17,6 +17,7 @@ const MAX_LOGS_HISTORY = 100;
 // ====================================================
 async function redisGet(key, fallback = null) {
   try {
+    if (!REDIS_URL || !REDIS_TOKEN) return fallback;
     const res = await axios.get(`${REDIS_URL}/get/${key}`, {
       headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
     });
@@ -31,6 +32,7 @@ async function redisGet(key, fallback = null) {
 
 async function redisSet(key, value) {
   try {
+    if (!REDIS_URL || !REDIS_TOKEN) return;
     await axios.post(`${REDIS_URL}/set/${key}`, JSON.stringify(value), {
       headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
     });
@@ -72,12 +74,44 @@ async function getCapturedLogs() {
 // ====================================================
 // MIDDLEWARES
 // ====================================================
-app.use(express.json({ limit: '20mb' }));
-app.use(express.raw({ type: '*/*', limit: '20mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ====================================================
 // API ROUTES
 // ====================================================
+
+// REDIS CONFIG API
+app.get('/api/redis-config', (req, res) => {
+  res.json({
+    url: REDIS_URL,
+    token: REDIS_TOKEN ? `${REDIS_TOKEN.substring(0, 8)}...${REDIS_TOKEN.slice(-6)}` : ''
+  });
+});
+
+app.post('/api/redis-config', async (req, res) => {
+  const { url, token } = req.body || {};
+  if (!url || !token) {
+    return res.status(400).json({ error: 'URL dan Token Redis wajib diisi!' });
+  }
+
+  REDIS_URL = url.trim().replace(/\/+$/, '');
+  REDIS_TOKEN = token.trim();
+
+  // Test koneksi
+  try {
+    const testRes = await axios.get(`${REDIS_URL}/ping`, {
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
+    });
+    if (testRes.data) {
+      return res.json({ success: true, message: 'Koneksi Redis berhasil diperbarui!' });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: `Gagal verifikasi Redis: ${err.message}` });
+  }
+});
+
+// TARGET API
 app.get('/api/target', async (req, res) => {
   const target = await getDefaultTarget();
   res.json({ target });
@@ -90,6 +124,7 @@ app.post('/api/target', async (req, res) => {
   res.json({ success: true, target });
 });
 
+// RULES API
 app.get('/api/rules', async (req, res) => {
   const rules = await getRulesFromRedis();
   res.json(rules);
@@ -101,7 +136,7 @@ app.post('/api/rules', async (req, res) => {
 
   if (type === 'hex') {
     payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
-    if (!payload) payload = '0000'; // Default jika kosong
+    if (!payload) payload = '0000';
   }
 
   let rules = await getRulesFromRedis();
@@ -112,7 +147,7 @@ app.post('/api/rules', async (req, res) => {
   res.json({ success: true, rule: newRule });
 });
 
-// BULK ADD RULES (Dari Multiple Captured Logs)
+// BULK ADD RULES
 app.post('/api/rules/bulk-add', async (req, res) => {
   const { newRules } = req.body || {};
   if (!Array.isArray(newRules) || newRules.length === 0) {
@@ -128,9 +163,9 @@ app.post('/api/rules/bulk-add', async (req, res) => {
       if (!cleanPayload) cleanPayload = '0000';
 
       rules.unshift({
-        id: Date.now() + Math.floor(Math.random() * 1000),
+        id: Date.now() + Math.floor(Math.random() * 10000) + addedCount,
         path: item.path.trim(),
-        type: 'hex',
+        type: item.type || 'hex',
         payload: cleanPayload
       });
       addedCount++;
@@ -196,7 +231,6 @@ app.delete('/api/logs', async (req, res) => {
   res.json({ success: true });
 });
 
-// BULK DELETE LOGS
 app.post('/api/logs/bulk-delete', async (req, res) => {
   const { ids } = req.body || {};
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -223,6 +257,7 @@ app.get('/dashboard', (req, res) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>⚡ Hex Interceptor & Rule Manager</title>
       <script src="https://cdn.tailwindcss.com"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
       <style>
         .glass-card {
           background: rgba(255, 255, 255, 0.04);
@@ -246,20 +281,10 @@ app.get('/dashboard', (req, res) => {
           height: 1rem;
           cursor: pointer;
         }
-        ::-webkit-scrollbar {
-          width: 6px;
-          height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-          background: rgba(15, 23, 42, 0.2);
-        }
-        ::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.15);
-          border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.2); }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
       </style>
     </head>
     <body class="bg-gradient-to-br from-slate-950 via-[#0a0f1d] to-[#120e2e] text-slate-100 min-h-screen p-4 md:p-8 font-sans antialiased relative selection:bg-indigo-500 selection:text-white">
@@ -275,10 +300,13 @@ app.get('/dashboard', (req, res) => {
             <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
               ⚡ Realtime Hex Proxy Interceptor
             </h1>
-            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Rules • Bulk Add to Rule • Default Empty Hex 0000</p>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Rules • ZIP Import/Export • Redis Settings</p>
           </div>
           
-          <div class="flex items-center gap-3 self-start md:self-auto">
+          <div class="flex flex-wrap items-center gap-3 self-start md:self-auto">
+            <button onclick="toggleRedisModal(true)" class="p-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs transition duration-200 flex items-center gap-1.5 font-medium">
+              ⚙️ Config Redis
+            </button>
             <div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/60 border border-slate-700/50 text-xs text-slate-300">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               <span>Sync: <b id="timer-count" class="text-emerald-400 font-mono font-bold">10s</b></span>
@@ -286,6 +314,28 @@ app.get('/dashboard', (req, res) => {
             <button onclick="manualRefresh()" class="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs transition duration-200">
               🔄 Sync Now
             </button>
+          </div>
+        </div>
+
+        <!-- REDIS CONFIG MODAL -->
+        <div id="redis-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+          <div class="glass-card bg-slate-900/90 border border-white/10 rounded-2xl p-6 w-full max-w-lg space-y-4">
+            <div class="flex items-center justify-between">
+              <h3 class="text-lg font-bold text-indigo-300 flex items-center gap-2">⚙️ Upstash Redis Configuration</h3>
+              <button onclick="toggleRedisModal(false)" class="text-slate-400 hover:text-white text-lg">&times;</button>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Upstash REST URL</label>
+              <input type="text" id="modal-redis-url" placeholder="https://xxxxxx.upstash.io" class="glass-input w-full p-2.5 rounded-xl text-sm text-white focus:outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Upstash REST Token</label>
+              <input type="password" id="modal-redis-token" placeholder="gQAAAAAA..." class="glass-input w-full p-2.5 rounded-xl text-sm text-white font-mono focus:outline-none">
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+              <button onclick="toggleRedisModal(false)" class="px-4 py-2 rounded-xl glass-card text-xs text-slate-300">Tutup</button>
+              <button onclick="saveRedisConfig()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">Simpan & Hubungkan</button>
+            </div>
           </div>
         </div>
 
@@ -303,7 +353,7 @@ app.get('/dashboard', (req, res) => {
           </div>
         </div>
 
-        <!-- FORM INTERCEPT RULES & FILE IMPORTER -->
+        <!-- FORM INTERCEPT RULES & ZIP/FILE IMPORTER -->
         <div class="glass-card p-5 md:p-6 rounded-2xl" id="rule-form-section">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div class="flex items-center gap-2">
@@ -311,11 +361,12 @@ app.get('/dashboard', (req, res) => {
               <h2 id="form-title" class="text-sm font-semibold tracking-wide uppercase text-indigo-300">Tambah Rule Baru</h2>
             </div>
             
-            <div class="flex items-center gap-2">
-              <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs font-medium transition">
-                <span>📁</span>
-                <span>Import dari File (.hex / .txt)</span>
-                <input type="file" id="file-import" accept=".hex,.txt" class="hidden" onchange="handleFileImport(event)">
+            <div class="flex flex-wrap items-center gap-2">
+              <!-- ZIP / SINGLE FILE IMPORT -->
+              <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 text-purple-200 text-xs font-medium transition">
+                <span>📦</span>
+                <span>Import (.zip / .hex / .txt)</span>
+                <input type="file" id="file-import" accept=".zip,.hex,.txt" class="hidden" onchange="handleFileImport(event)">
               </label>
             </div>
           </div>
@@ -359,7 +410,14 @@ app.get('/dashboard', (req, res) => {
               </h3>
             </div>
             
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <!-- ZIP EXPORT BUTTONS -->
+              <button onclick="downloadAllRulesZip('hex')" class="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-xs px-3 py-1.5 rounded-xl transition font-medium flex items-center gap-1">
+                📦 Download All Rules (.hex .zip)
+              </button>
+              <button onclick="downloadAllRulesZip('txt')" class="bg-slate-700/40 hover:bg-slate-700/60 border border-slate-600/40 text-slate-200 text-xs px-3 py-1.5 rounded-xl transition font-medium flex items-center gap-1">
+                📦 (.txt .zip)
+              </button>
               <button id="btn-bulk-delete-rules" onclick="deleteSelectedRules()" class="hidden bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
                 🗑️ Hapus (<span id="selected-rules-count">0</span>) Terpilih
               </button>
@@ -391,13 +449,12 @@ app.get('/dashboard', (req, res) => {
               <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
                 <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Centang 1 atau banyak response untuk langsung dijadikan Rule atau dihapus bersamaan.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Centang 1 atau banyak response untuk dijadikan Rule atau dihapus bersamaan.</p>
             </div>
             
             <div class="flex flex-wrap items-center gap-2">
               <input type="text" id="search-log" oninput="renderLogs()" placeholder="Cari Path..." class="glass-input px-3 py-1.5 rounded-xl text-xs text-white focus:outline-none transition">
               
-              <!-- Bulk Action Buttons for Logs -->
               <button id="btn-bulk-add-rules" onclick="addSelectedLogsToRules()" class="hidden bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
                 ⚡ Jadikan Rule (<span id="selected-logs-add-count">0</span>)
               </button>
@@ -464,20 +521,123 @@ app.get('/dashboard', (req, res) => {
         }
 
         // ====================================================
-        // FILE IMPORTER
+        // REDIS CONFIG MODAL LOGIC
         // ====================================================
-        function handleFileImport(event) {
+        async function toggleRedisModal(show) {
+          const modal = document.getElementById('redis-modal');
+          if (show) {
+            try {
+              const res = await fetch('/api/redis-config');
+              const data = await res.json();
+              document.getElementById('modal-redis-url').value = data.url || '';
+              document.getElementById('modal-redis-token').value = '';
+            } catch(e) {}
+            modal.classList.remove('hidden');
+          } else {
+            modal.classList.add('hidden');
+          }
+        }
+
+        async function saveRedisConfig() {
+          const url = document.getElementById('modal-redis-url').value;
+          const token = document.getElementById('modal-redis-token').value;
+
+          if (!url || !token) return alert('URL dan Token Upstash Redis wajib diisi!');
+
+          try {
+            const res = await fetch('/api/redis-config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, token })
+            });
+            const data = await res.json();
+            if (data.success) {
+              alert('Redis Config Berhasil Diperbarui!');
+              toggleRedisModal(false);
+              syncAll();
+            } else {
+              alert('Error: ' + (data.error || 'Gagal update redis'));
+            }
+          } catch(err) {
+            alert('Gagal menghubungi server: ' + err.message);
+          }
+        }
+
+        // ====================================================
+        // ZIP & FILE IMPORTER (.zip, .hex, .txt)
+        // ====================================================
+        async function handleFileImport(event) {
           const file = event.target.files[0];
           if (!file) return;
 
-          const fileName = file.name;
-          let guessedPath = fileName.replace(/_response\.(hex|txt)$/i, '').replace(/\.(hex|txt)$/i, '');
+          const fileName = file.name.toLowerCase();
+
+          // 1. IMPORT ZIP
+          if (fileName.endsWith('.zip')) {
+            try {
+              const zip = new JSZip();
+              const zipContent = await zip.loadAsync(file);
+              const importedRules = [];
+
+              for (const [relativePath, zipEntry] of Object.entries(zipContent.files)) {
+                if (zipEntry.dir) continue;
+                
+                const entryName = zipEntry.name.split('/').pop();
+                if (!entryName.match(/\\.(hex|txt)$/i)) continue;
+
+                let guessedPath = entryName.replace(/_response\\.(hex|txt)$/i, '').replace(/\\.(hex|txt)$/i, '');
+                if (guessedPath && !guessedPath.startsWith('/')) {
+                  guessedPath = '/' + guessedPath;
+                }
+
+                let cleanHex = '';
+                if (entryName.endsWith('.hex')) {
+                  const buffer = await zipEntry.async('uint8array');
+                  for (let i = 0; i < buffer.length; i++) {
+                    cleanHex += buffer[i].toString(16).padStart(2, '0');
+                  }
+                } else {
+                  const text = await zipEntry.async('string');
+                  cleanHex = text.replace(/[^0-9a-fA-F]/g, '');
+                }
+
+                if (!cleanHex) cleanHex = '0000';
+
+                importedRules.push({
+                  path: guessedPath,
+                  type: 'hex',
+                  payload: cleanHex
+                });
+              }
+
+              if (importedRules.length === 0) {
+                alert('Tidak ditemukan file payload .hex atau .txt di dalam archive ZIP!');
+                return;
+              }
+
+              if (confirm(\`Ditemukan \${importedRules.length} rules dalam ZIP. Tambahkan semuanya ke Active Rules?\`)) {
+                await fetch('/api/rules/bulk-add', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ newRules: importedRules })
+                });
+                fetchRules();
+                alert(\`Berhasil mengimpor \${importedRules.length} rules dari ZIP!\`);
+              }
+            } catch(e) {
+              alert('Gagal membaca file ZIP: ' + e.message);
+            }
+            event.target.value = '';
+            return;
+          }
+
+          // 2. IMPORT SINGLE FILE (.hex / .txt)
+          let guessedPath = file.name.replace(/_response\\.(hex|txt)$/i, '').replace(/\\.(hex|txt)$/i, '');
           if (guessedPath && !guessedPath.startsWith('/')) {
             guessedPath = '/' + guessedPath;
           }
 
           const reader = new FileReader();
-
           if (fileName.endsWith('.hex')) {
             reader.onload = function(e) {
               const buffer = new Uint8Array(e.target.result);
@@ -490,8 +650,7 @@ app.get('/dashboard', (req, res) => {
             reader.readAsArrayBuffer(file);
           } else {
             reader.onload = function(e) {
-              const textContent = e.target.result;
-              let cleanHex = textContent.replace(/[^0-9a-fA-F]/g, '');
+              const cleanHex = (e.target.result || '').replace(/[^0-9a-fA-F]/g, '');
               applyImportedData(guessedPath, cleanHex || '0000');
             };
             reader.readAsText(file);
@@ -510,7 +669,44 @@ app.get('/dashboard', (req, res) => {
           document.getElementById('payload').value = hexData || '0000';
 
           document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
-          alert('Berhasil mengimpor data payload! Silakan periksa path lalu klik "Simpan Rule".');
+          alert('Berhasil mengimpor payload! Silakan periksa formulir lalu klik "Simpan Rule".');
+        }
+
+        // ====================================================
+        // ZIP EXPORT (DOWNLOAD ALL RULES AS ZIP)
+        // ====================================================
+        async function downloadAllRulesZip(format = 'hex') {
+          if (!allRules || allRules.length === 0) {
+            return alert('Tidak ada active rules untuk di-download!');
+          }
+
+          const hexRules = allRules.filter(r => r.type === 'hex');
+          if (hexRules.length === 0) {
+            return alert('Tidak ada rules bertipe Hex Buffer untuk di-download.');
+          }
+
+          const zip = new JSZip();
+
+          hexRules.forEach((rule, idx) => {
+            const cleanPath = (rule.path || \`rule_\${idx}\`).replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^_+|_+$/g, '') || 'root';
+            const fileName = \`\${cleanPath}_response.\${format}\`;
+            const rawHex = (rule.payload || '0000').replace(/[^0-9a-fA-F]/g, '');
+
+            if (format === 'hex') {
+              const bytes = new Uint8Array(rawHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || [0x00, 0x00]);
+              zip.file(fileName, bytes);
+            } else {
+              zip.file(fileName, rawHex || '0000');
+            }
+          });
+
+          const content = await zip.generateAsync({ type: 'blob' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(content);
+          link.download = \`active_rules_\${format}_\${Date.now()}.zip\`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
         }
 
         // ====================================================
@@ -849,7 +1045,6 @@ app.get('/dashboard', (req, res) => {
             bulkAddBtn.classList.remove('hidden');
           } else {
             bulkDeleteBtn.classList.add('hidden');
-            bulkAddBtn.classList.remove('hidden');
             bulkAddBtn.classList.add('hidden');
           }
 
@@ -908,7 +1103,7 @@ app.get('/dashboard', (req, res) => {
         }
 
         // ====================================================
-        // 10s AUTO-SYNC
+        // AUTO-SYNC
         // ====================================================
         function syncAll() {
           fetchLogs();
@@ -956,7 +1151,7 @@ app.use(async (req, res) => {
       console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
       
       let cleanHex = (matchedRule.payload || '').replace(/[^0-9a-fA-F]/g, '');
-      if (!cleanHex) cleanHex = '0000'; // Default jika kosong
+      if (!cleanHex) cleanHex = '0000';
 
       const hexBuffer = Buffer.from(cleanHex, 'hex');
 
@@ -998,7 +1193,6 @@ async function forwardRequest(req, res, targetBase) {
     const responseBuffer = Buffer.from(response.data || []);
     let hexString = responseBuffer.toString('hex');
 
-    // Jika response kosong / 0 byte, fallback ke '0000'
     if (!hexString || hexString.trim() === '') {
       hexString = '0000';
     }
