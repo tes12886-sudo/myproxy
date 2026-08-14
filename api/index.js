@@ -97,10 +97,11 @@ app.get('/api/rules', async (req, res) => {
 
 app.post('/api/rules', async (req, res) => {
   let { path, type, payload } = req.body || {};
-  if (!path || !type || !payload) return res.status(400).json({ error: 'Semua field wajib diisi!' });
+  if (!path || !type) return res.status(400).json({ error: 'Field path dan tipe wajib diisi!' });
 
   if (type === 'hex') {
-    payload = payload.replace(/[^0-9a-fA-F]/g, '');
+    payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
+    if (!payload) payload = '0000'; // Default jika kosong
   }
 
   let rules = await getRulesFromRedis();
@@ -111,12 +112,42 @@ app.post('/api/rules', async (req, res) => {
   res.json({ success: true, rule: newRule });
 });
 
+// BULK ADD RULES (Dari Multiple Captured Logs)
+app.post('/api/rules/bulk-add', async (req, res) => {
+  const { newRules } = req.body || {};
+  if (!Array.isArray(newRules) || newRules.length === 0) {
+    return res.status(400).json({ error: 'Data rule tidak valid!' });
+  }
+
+  let rules = await getRulesFromRedis();
+  let addedCount = 0;
+
+  for (const item of newRules) {
+    if (item.path) {
+      let cleanPayload = (item.payload || '').replace(/[^0-9a-fA-F]/g, '');
+      if (!cleanPayload) cleanPayload = '0000';
+
+      rules.unshift({
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        path: item.path.trim(),
+        type: 'hex',
+        payload: cleanPayload
+      });
+      addedCount++;
+    }
+  }
+
+  await saveRulesToRedis(rules);
+  res.json({ success: true, count: addedCount });
+});
+
 app.put('/api/rules/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   let { path, type, payload } = req.body || {};
 
-  if (type === 'hex' && payload) {
-    payload = payload.replace(/[^0-9a-fA-F]/g, '');
+  if (type === 'hex') {
+    payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
+    if (!payload) payload = '0000';
   }
 
   let rules = await getRulesFromRedis();
@@ -181,7 +212,7 @@ app.post('/api/logs/bulk-delete', async (req, res) => {
 });
 
 // ====================================================
-// DASHBOARD UI (GLASSMORPHISM + MULTI-SELECT DELETE)
+// DASHBOARD UI
 // ====================================================
 app.get('/dashboard', (req, res) => {
   res.send(`
@@ -233,7 +264,6 @@ app.get('/dashboard', (req, res) => {
     </head>
     <body class="bg-gradient-to-br from-slate-950 via-[#0a0f1d] to-[#120e2e] text-slate-100 min-h-screen p-4 md:p-8 font-sans antialiased relative selection:bg-indigo-500 selection:text-white">
       
-      <!-- Ambient Glows -->
       <div class="fixed top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[130px] pointer-events-none -z-10"></div>
       <div class="fixed bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-emerald-600/10 rounded-full blur-[140px] pointer-events-none -z-10"></div>
 
@@ -245,7 +275,7 @@ app.get('/dashboard', (req, res) => {
             <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
               ⚡ Realtime Hex Proxy Interceptor
             </h1>
-            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Delete • Import Rules • 1-Click Convert</p>
+            <p class="text-slate-400 text-xs md:text-sm mt-1">Multi-Select Bulk Rules • Bulk Add to Rule • Default Empty Hex 0000</p>
           </div>
           
           <div class="flex items-center gap-3 self-start md:self-auto">
@@ -305,8 +335,8 @@ app.get('/dashboard', (req, res) => {
               </select>
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1.5" id="payload-label">Hex String (Auto Clean Spasi)</label>
-              <input type="text" id="payload" oninput="cleanHexInput(this)" placeholder="0a0c080110..." class="glass-input w-full p-2.5 rounded-xl text-sm text-white font-mono focus:outline-none transition">
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" id="payload-label">Hex String (Kosong = 0000)</label>
+              <input type="text" id="payload" oninput="cleanHexInput(this)" placeholder="0a0c080110... (atau kosongkan untuk 0000)" class="glass-input w-full p-2.5 rounded-xl text-sm text-white font-mono focus:outline-none transition">
             </div>
           </div>
           
@@ -361,12 +391,17 @@ app.get('/dashboard', (req, res) => {
               <h3 class="font-semibold text-sm tracking-wide text-emerald-400 flex items-center gap-2">
                 <span>📥</span> Captured Responses (<span id="log-count">0</span> Data)
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Pilih satu atau banyak response untuk dihapus bersamaan.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Centang 1 atau banyak response untuk langsung dijadikan Rule atau dihapus bersamaan.</p>
             </div>
             
             <div class="flex flex-wrap items-center gap-2">
               <input type="text" id="search-log" oninput="renderLogs()" placeholder="Cari Path..." class="glass-input px-3 py-1.5 rounded-xl text-xs text-white focus:outline-none transition">
               
+              <!-- Bulk Action Buttons for Logs -->
+              <button id="btn-bulk-add-rules" onclick="addSelectedLogsToRules()" class="hidden bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
+                ⚡ Jadikan Rule (<span id="selected-logs-add-count">0</span>)
+              </button>
+
               <button id="btn-bulk-delete-logs" onclick="deleteSelectedLogs()" class="hidden bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs px-3 py-1.5 rounded-xl transition font-medium">
                 🗑️ Hapus (<span id="selected-logs-count">0</span>) Terpilih
               </button>
@@ -419,8 +454,8 @@ app.get('/dashboard', (req, res) => {
           const input = document.getElementById('payload');
           
           if(type === 'hex') {
-            label.innerText = 'Hex String (Auto Clean Spasi)';
-            input.placeholder = '0a0c080110...';
+            label.innerText = 'Hex String (Kosong = 0000)';
+            input.placeholder = '0a0c080110... (atau kosongkan untuk 0000)';
             input.value = input.value.replace(/[^0-9a-fA-F]/g, '');
           } else {
             label.innerText = 'Target URL';
@@ -450,14 +485,14 @@ app.get('/dashboard', (req, res) => {
               for (let i = 0; i < buffer.length; i++) {
                 hexString += buffer[i].toString(16).padStart(2, '0');
               }
-              applyImportedData(guessedPath, hexString);
+              applyImportedData(guessedPath, hexString || '0000');
             };
             reader.readAsArrayBuffer(file);
           } else {
             reader.onload = function(e) {
               const textContent = e.target.result;
-              const cleanHex = textContent.replace(/[^0-9a-fA-F]/g, '');
-              applyImportedData(guessedPath, cleanHex);
+              let cleanHex = textContent.replace(/[^0-9a-fA-F]/g, '');
+              applyImportedData(guessedPath, cleanHex || '0000');
             };
             reader.readAsText(file);
           }
@@ -472,14 +507,14 @@ app.get('/dashboard', (req, res) => {
           if (guessedPath && guessedPath !== '/root') {
             document.getElementById('path').value = guessedPath;
           }
-          document.getElementById('payload').value = hexData;
+          document.getElementById('payload').value = hexData || '0000';
 
           document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
           alert('Berhasil mengimpor data payload! Silakan periksa path lalu klik "Simpan Rule".');
         }
 
         // ====================================================
-        // QUICK CONVERT INTERCEPT LOG TO RULE
+        // QUICK CONVERT & BULK ADD LOGS TO RULES
         // ====================================================
         function makeRuleFromLog(id) {
           const item = allLogs.find(l => l.id == id);
@@ -489,13 +524,37 @@ app.get('/dashboard', (req, res) => {
           document.getElementById('path').value = item.path;
           document.getElementById('type').value = 'hex';
           updatePlaceholder();
-          document.getElementById('payload').value = item.hex;
+          document.getElementById('payload').value = item.hex || '0000';
 
           document.getElementById('form-title').innerText = 'Jadikan Response Sebagai Rule Intercept';
           document.getElementById('btn-save').innerText = 'Simpan Intercept Rule Ini';
           document.getElementById('btn-cancel').classList.remove('hidden');
 
           document.getElementById('rule-form-section').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        async function addSelectedLogsToRules() {
+          const ids = Array.from(selectedLogIds);
+          if (ids.length === 0) return;
+
+          const selectedItems = allLogs.filter(l => selectedLogIds.has(String(l.id)));
+          const payloadList = selectedItems.map(item => ({
+            path: item.path,
+            payload: item.hex || '0000'
+          }));
+
+          if (!confirm(\`Tambahkan \${payloadList.length} response terpilih ke Active Intercept Rules?\`)) return;
+
+          await fetch('/api/rules/bulk-add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newRules: payloadList })
+          });
+
+          selectedLogIds.clear();
+          fetchRules();
+          fetchLogs();
+          alert(\`Berhasil menambahkan \${payloadList.length} rule baru!\`);
         }
 
         // ====================================================
@@ -623,8 +682,11 @@ app.get('/dashboard', (req, res) => {
           const type = document.getElementById('type').value;
           let payload = document.getElementById('payload').value;
 
-          if(!path || !payload) return alert('Semua field wajib diisi!');
-          if(type === 'hex') payload = payload.replace(/[^0-9a-fA-F]/g, '');
+          if(!path) return alert('Path wajib diisi!');
+          if(type === 'hex') {
+            payload = (payload || '').replace(/[^0-9a-fA-F]/g, '');
+            if(!payload) payload = '0000';
+          }
 
           if(id) {
             await fetch('/api/rules/' + id, {
@@ -714,6 +776,7 @@ app.get('/dashboard', (req, res) => {
 
           tbody.innerHTML = filtered.map(log => {
             const isChecked = selectedLogIds.has(String(log.id));
+            const displayHex = log.hex || '0000';
             return \`
               <tr class="hover:bg-white/[0.02] transition \${isChecked ? 'bg-indigo-500/10' : ''}">
                 <td class="p-4 text-center">
@@ -726,7 +789,7 @@ app.get('/dashboard', (req, res) => {
                     \${log.status}
                   </span>
                 </td>
-                <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${log.hex.substring(0, 24)}... (\${log.byteLength} B)</td>
+                <td class="p-4 font-mono text-xs text-slate-300 max-w-xs truncate">\${displayHex.substring(0, 24)}... (\${log.byteLength} B)</td>
                 <td class="p-4 text-center whitespace-nowrap">
                   <div class="flex items-center justify-center gap-1.5">
                     <button onclick="makeRuleFromLog('\${log.id}')" title="Gunakan sebagai Rule Intercept" class="bg-emerald-600/30 hover:bg-emerald-600 border border-emerald-500/40 text-emerald-200 text-xs px-2 py-1 rounded-lg transition font-medium">
@@ -771,15 +834,23 @@ app.get('/dashboard', (req, res) => {
         }
 
         function updateLogsSelectionUI(filteredList = []) {
-          const bulkBtn = document.getElementById('btn-bulk-delete-logs');
+          const bulkDeleteBtn = document.getElementById('btn-bulk-delete-logs');
+          const bulkAddBtn = document.getElementById('btn-bulk-add-rules');
           const countSpan = document.getElementById('selected-logs-count');
+          const addCountSpan = document.getElementById('selected-logs-add-count');
           const selectAllEl = document.getElementById('select-all-logs');
 
-          countSpan.innerText = selectedLogIds.size;
-          if (selectedLogIds.size > 0) {
-            bulkBtn.classList.remove('hidden');
+          const totalSelected = selectedLogIds.size;
+          countSpan.innerText = totalSelected;
+          addCountSpan.innerText = totalSelected;
+
+          if (totalSelected > 0) {
+            bulkDeleteBtn.classList.remove('hidden');
+            bulkAddBtn.classList.remove('hidden');
           } else {
-            bulkBtn.classList.add('hidden');
+            bulkDeleteBtn.classList.add('hidden');
+            bulkAddBtn.classList.remove('hidden');
+            bulkAddBtn.classList.add('hidden');
           }
 
           if (filteredList.length > 0) {
@@ -817,14 +888,15 @@ app.get('/dashboard', (req, res) => {
 
           const cleanNamePath = item.path.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^_+|_+$/g, '') || 'root';
           const filename = \`\${cleanNamePath}_response.\${ext}\`;
+          const rawHex = item.hex || '0000';
 
           let blob;
           if (ext === 'hex') {
-            const cleanHex = item.hex.replace(/[^0-9a-fA-F]/g, '');
-            const bytes = new Uint8Array(cleanHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []);
+            const cleanHex = rawHex.replace(/[^0-9a-fA-F]/g, '');
+            const bytes = new Uint8Array(cleanHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || [0x00, 0x00]);
             blob = new Blob([bytes], { type: 'application/octet-stream' });
           } else {
-            blob = new Blob([item.hex], { type: 'text/plain;charset=utf-8' });
+            blob = new Blob([rawHex], { type: 'text/plain;charset=utf-8' });
           }
 
           const link = document.createElement('a');
@@ -883,7 +955,9 @@ app.use(async (req, res) => {
     if (matchedRule.type === 'hex') {
       console.log(`[RAW HEX INTERCEPT] Path: ${req.path}`);
       
-      const cleanHex = matchedRule.payload.replace(/[^0-9a-fA-F]/g, '');
+      let cleanHex = (matchedRule.payload || '').replace(/[^0-9a-fA-F]/g, '');
+      if (!cleanHex) cleanHex = '0000'; // Default jika kosong
+
       const hexBuffer = Buffer.from(cleanHex, 'hex');
 
       res.setHeader('Content-Type', 'application/octet-stream');
@@ -921,15 +995,20 @@ async function forwardRequest(req, res, targetBase) {
       validateStatus: () => true,
     });
 
-    const responseBuffer = Buffer.from(response.data);
-    const hexString = responseBuffer.toString('hex');
+    const responseBuffer = Buffer.from(response.data || []);
+    let hexString = responseBuffer.toString('hex');
+
+    // Jika response kosong / 0 byte, fallback ke '0000'
+    if (!hexString || hexString.trim() === '') {
+      hexString = '0000';
+    }
 
     pushCapturedLog({
       id: Date.now() + '-' + Math.random().toString(36).substring(2, 7),
       time: new Date().toLocaleTimeString('id-ID'),
       path: req.path,
       status: response.status,
-      byteLength: responseBuffer.length,
+      byteLength: responseBuffer.length > 0 ? responseBuffer.length : 2,
       hex: hexString
     }).catch(err => console.error('[LOG SAVE ERROR]', err.message));
 
